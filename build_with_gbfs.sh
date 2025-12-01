@@ -2,9 +2,9 @@
 #
 # Build GBA ROM with GBFS media archive
 #
-# Usage: ./build_with_gbfs.sh [file.gbs|file.gbm ...]
-#
-# If no files specified, uses all .gbs and .gbm files in data/ directory
+# Usage: ./build_with_gbfs.sh <video.gbm> <audio.gbs>
+#        ./build_with_gbfs.sh <video.gbm>
+#        ./build_with_gbfs.sh <audio.gbs>
 #
 
 set -e
@@ -20,49 +20,85 @@ if [ ! -x "$GBFS_CMD" ]; then
     exit 1
 fi
 
+# Show usage
+show_usage() {
+    echo "Usage: $0 <video.gbm> <audio.gbs>"
+    echo "       $0 <video.gbm>"
+    echo "       $0 <audio.gbs>"
+    echo ""
+    echo "Examples:"
+    echo "  $0 ../output.gbm ../output.gbs"
+    echo "  $0 ../video_only.gbm"
+    echo "  $0 ../audio_only.gbs"
+    exit 1
+}
+
+# Need at least one argument
+if [ $# -eq 0 ]; then
+    show_usage
+fi
+
+# Parse arguments
+GBM_FILE=""
+GBS_FILE=""
+
+for arg in "$@"; do
+    if [ ! -f "$arg" ]; then
+        echo "Error: File not found: $arg"
+        exit 1
+    fi
+
+    case "${arg##*.}" in
+        gbm|GBM)
+            if [ -n "$GBM_FILE" ]; then
+                echo "Error: Multiple .gbm files specified"
+                exit 1
+            fi
+            GBM_FILE="$arg"
+            ;;
+        gbs|GBS)
+            if [ -n "$GBS_FILE" ]; then
+                echo "Error: Multiple .gbs files specified"
+                exit 1
+            fi
+            GBS_FILE="$arg"
+            ;;
+        *)
+            echo "Error: Unknown file type: $arg"
+            echo "Supported: .gbm (video), .gbs (audio)"
+            exit 1
+            ;;
+    esac
+done
+
 # Build the ROM first
 echo "Building ROM..."
 make
 
-# Get input files
-if [ $# -eq 0 ]; then
-    # Use all .gbs and .gbm files in data/
-    MEDIA_FILES=$(find data -name "*.gbs" -o -name "*.gbm" 2>/dev/null | sort)
-    if [ -z "$MEDIA_FILES" ]; then
-        echo "No media files specified and none found in data/"
-        echo "Usage: $0 [file.gbs|file.gbm ...]"
-        echo ""
-        echo "Supported formats:"
-        echo "  .gbs - GBA Sound (audio)"
-        echo "  .gbm - GBA Movie (video)"
-        exit 1
-    fi
-else
-    MEDIA_FILES="$@"
+echo ""
+echo "Creating GBFS archive:"
+
+# Collect files to add (rename to standard names for simplicity)
+TEMP_DIR=$(mktemp -d)
+MEDIA_FILES=""
+
+if [ -n "$GBM_FILE" ]; then
+    cp "$GBM_FILE" "$TEMP_DIR/video.gbm"
+    MEDIA_FILES="$TEMP_DIR/video.gbm"
+    echo "  [Video] $GBM_FILE -> video.gbm"
 fi
 
-# Verify files exist
-for f in $MEDIA_FILES; do
-    if [ ! -f "$f" ]; then
-        echo "Error: File not found: $f"
-        exit 1
-    fi
-done
-
-echo "Creating GBFS archive with:"
-for f in $MEDIA_FILES; do
-    # Show file type
-    case "${f##*.}" in
-        gbs|GBS) echo "  [Audio] $f" ;;
-        gbm|GBM) echo "  [Video] $f" ;;
-        *)       echo "  [?????] $f" ;;
-    esac
-done
+if [ -n "$GBS_FILE" ]; then
+    cp "$GBS_FILE" "$TEMP_DIR/audio.gbs"
+    MEDIA_FILES="$MEDIA_FILES $TEMP_DIR/audio.gbs"
+    echo "  [Audio] $GBS_FILE -> audio.gbs"
+fi
 
 # Output filename
 OUTPUT_ROM="gba_media_player.gba"
 
 # Copy ROM to output file (preserve original)
+echo ""
 echo "Copying ROM to $OUTPUT_ROM..."
 cp gba_audio_decoder.gba "$OUTPUT_ROM"
 
@@ -80,9 +116,9 @@ cat media_data.gbfs >> "$OUTPUT_ROM"
 
 # Clean up
 rm -f media_data.gbfs
+rm -rf "$TEMP_DIR"
 
 # Show result
 echo ""
 echo "Done! Output: $OUTPUT_ROM"
-echo "(Original gba_audio_decoder.gba preserved)"
 ls -la "$OUTPUT_ROM"
