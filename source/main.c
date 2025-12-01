@@ -110,6 +110,9 @@ int main(void) {
     irqInit();
     irqEnable(IRQ_VBLANK);
 
+    // Initialize video decoder (copies codebook to IWRAM)
+    gbm_init();
+
     // Initialize media source
     if (!media_source_init()) {
         show_error("No GBFS found!\nAppend media with GBFS.");
@@ -146,7 +149,7 @@ int main(void) {
     show_info();
 
     // Wait a moment to show info
-    for (int i = 0; i < 120; i++) {
+    for (int i = 0; i < 30; i++) {
         VBlankIntrWait();
     }
 

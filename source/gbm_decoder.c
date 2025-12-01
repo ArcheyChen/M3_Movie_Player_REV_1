@@ -3,9 +3,11 @@
 
 #define ROW_BYTES (FRAME_WIDTH * 2)
 
-// Codebook offsets
-// Putting this in const (ROM) is fine, cache handles it.
-static const s16 CODEBOOK_OFFSETS[] = {
+// Codebook offsets - place in IWRAM data section for fast access (256 bytes)
+__attribute__((section(".iwram.data"))) static s16 CODEBOOK_OFFSETS[256];
+
+// ROM source for codebook (will be copied to IWRAM at init)
+static const s16 CODEBOOK_OFFSETS_ROM[] = {
     -3856, -3854, -3852, -3850, -3848, -3846, -3844, -3842,
     -3840, -3838, -3836, -3834, -3832, -3830, -3828, -3826,
     -3376, -3374, -3372, -3370, -3368, -3366, -3364, -3362,
@@ -40,6 +42,13 @@ static const s16 CODEBOOK_OFFSETS[] = {
     3360, 3362, 3364, 3366, 3368, 3370, 3372, 3374,
 };
 
+// Initialize codebook in IWRAM (call once at startup)
+void gbm_init(void) {
+    for (int i = 0; i < 256; i++) {
+        CODEBOOK_OFFSETS[i] = CODEBOOK_OFFSETS_ROM[i];
+    }
+}
+
 // Inline helpers
 static inline u32 read_u32_unaligned(const u8 *ptr) {
     // GBA supports unaligned loads? NO. ARM7TDMI does NOT support unaligned loads correctly (it rotates).
@@ -52,29 +61,27 @@ static inline u16 read_u16_unaligned(const u8 *ptr) {
 }
 
 // Critical Path: next_bit
-// Placing in IWRAM
+// Placing in IWRAM, optimized version
 static IWRAM_CODE int next_bit(DecodeContext *ctx) {
-    int prev_sign = 0;
+    u32 state = ctx->state;
 
-    if (ctx->state != 0) {
-        int bit = (ctx->state >> 31) & 1;
-        ctx->state = (ctx->state << 1); 
-        if (ctx->state != 0) {
-            return bit;
-        }
-        prev_sign = bit;
-    } else {
-        prev_sign = 0;
+    // Fast path: state has bits remaining
+    if (state > 1) {
+        int bit = state >> 31;
+        ctx->state = state << 1;
+        return bit;
     }
 
-    u32 word = read_u32_unaligned(ctx->flag_ptr);
-    ctx->flag_ptr += 4;
+    // Need to load new word
+    // state is 0 or 1 (1 means prev bit was 1 and we consumed all bits)
+    int prev_sign = state;
 
-    int bit = (word >> 31) & 1;
-    ctx->state = (word << 1);
-    if (prev_sign) {
-        ctx->state++;
-    }
+    const u8 *p = ctx->flag_ptr;
+    u32 word = p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24);
+    ctx->flag_ptr = p + 4;
+
+    int bit = word >> 31;
+    ctx->state = (word << 1) | prev_sign;
     return bit;
 }
 
@@ -95,83 +102,87 @@ static inline u8 read_code(DecodeContext *ctx) {
 }
 
 // Block operations - Hot path
+// Use 32-bit operations where possible for better throughput
 static IWRAM_CODE void copy_u32_block(DecodeContext *ctx, int dst_off, int ref_off, int rows, int words) {
-    // Manual loop unrolling or optimization could help here
+    u32 *d = (u32*)((u8*)ctx->dst + dst_off);
+    const u32 *s = (const u32*)((const u8*)ctx->ref + ref_off);
+
+    // ROW_BYTES = 480, so stride in u32 = 120
+    const int stride = ROW_BYTES >> 2;
+
     for (int r = 0; r < rows; r++) {
-        // Pre-calculate row pointers
-        u16 *d = ctx->dst + (dst_off >> 1);
-        const u16 *s = ctx->ref + (ref_off >> 1);
-        
         for (int i = 0; i < words; i++) {
-            // Copy 2 pixels (32-bit) at a time if aligned?
-            // ctx->dst and ctx->ref are u16*. 
-            // We can treat them as u32* if they are 4-byte aligned.
-            // (dst_off >> 1) is pixel index. If pixel index is even, it's 4-byte aligned.
-            // However, offsets might be odd pixels (2 bytes aligned).
-            // Let's stick to u16 copy to be safe, but maybe unroll.
-            d[i * 2] = s[i * 2];
-            d[i * 2 + 1] = s[i * 2 + 1];
+            d[i] = s[i];
         }
-        dst_off += ROW_BYTES;
-        ref_off += ROW_BYTES;
+        d += stride;
+        s += stride;
     }
 }
 
 static IWRAM_CODE void fill_u32_block(DecodeContext *ctx, int dst_off, int rows, int words, u16 color) {
+    u32 *d = (u32*)((u8*)ctx->dst + dst_off);
+    const u32 color32 = color | (color << 16);
+    const int stride = ROW_BYTES >> 2;
+
     for (int r = 0; r < rows; r++) {
-        u16 *d = ctx->dst + (dst_off >> 1);
         for (int i = 0; i < words; i++) {
-            d[i * 2] = color;
-            d[i * 2 + 1] = color;
+            d[i] = color32;
         }
-        dst_off += ROW_BYTES;
+        d += stride;
     }
 }
 
 static IWRAM_CODE void delta_u32_block(DecodeContext *ctx, int dst_off, int ref_off, int rows, int words, s16 delta) {
+    u16 *d = (u16*)((u8*)ctx->dst + dst_off);
+    const u16 *s = (const u16*)((const u8*)ctx->ref + ref_off);
+    const int stride = ROW_BYTES >> 1;
+
     for (int r = 0; r < rows; r++) {
-        u16 *d = ctx->dst + (dst_off >> 1);
-        const u16 *s = ctx->ref + (ref_off >> 1);
-        for (int i = 0; i < words; i++) {
-            d[i * 2] = s[i * 2] + delta;
-            d[i * 2 + 1] = s[i * 2 + 1] + delta;
+        for (int i = 0; i < words * 2; i++) {
+            d[i] = s[i] + delta;
         }
-        dst_off += ROW_BYTES;
-        ref_off += ROW_BYTES;
+        d += stride;
+        s += stride;
     }
 }
 
 static IWRAM_CODE void copy_u16_block(DecodeContext *ctx, int dst_off, int ref_off, int rows, int halfwords) {
+    u16 *d = (u16*)((u8*)ctx->dst + dst_off);
+    const u16 *s = (const u16*)((const u8*)ctx->ref + ref_off);
+    const int stride = ROW_BYTES >> 1;
+
     for (int r = 0; r < rows; r++) {
-        u16 *d = ctx->dst + (dst_off >> 1);
-        const u16 *s = ctx->ref + (ref_off >> 1);
         for (int i = 0; i < halfwords; i++) {
             d[i] = s[i];
         }
-        dst_off += ROW_BYTES;
-        ref_off += ROW_BYTES;
+        d += stride;
+        s += stride;
     }
 }
 
 static IWRAM_CODE void fill_u16_block(DecodeContext *ctx, int dst_off, int rows, int halfwords, u16 color) {
+    u16 *d = (u16*)((u8*)ctx->dst + dst_off);
+    const int stride = ROW_BYTES >> 1;
+
     for (int r = 0; r < rows; r++) {
-        u16 *d = ctx->dst + (dst_off >> 1);
         for (int i = 0; i < halfwords; i++) {
             d[i] = color;
         }
-        dst_off += ROW_BYTES;
+        d += stride;
     }
 }
 
 static IWRAM_CODE void delta_u16_block(DecodeContext *ctx, int dst_off, int ref_off, int rows, int halfwords, s16 delta) {
+    u16 *d = (u16*)((u8*)ctx->dst + dst_off);
+    const u16 *s = (const u16*)((const u8*)ctx->ref + ref_off);
+    const int stride = ROW_BYTES >> 1;
+
     for (int r = 0; r < rows; r++) {
-        u16 *d = ctx->dst + (dst_off >> 1);
-        const u16 *s = ctx->ref + (ref_off >> 1);
         for (int i = 0; i < halfwords; i++) {
             d[i] = s[i] + delta;
         }
-        dst_off += ROW_BYTES;
-        ref_off += ROW_BYTES;
+        d += stride;
+        s += stride;
     }
 }
 

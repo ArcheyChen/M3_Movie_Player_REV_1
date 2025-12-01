@@ -28,7 +28,11 @@ typedef struct {
     int block_offset; // Current block offset in bytes
 } DecodeContext;
 
-// Initialize and decode a frame
+// Initialize decoder (copies codebook to IWRAM)
+// Call once at startup
+void gbm_init(void);
+
+// Decode a frame
 // returns the offset of the next frame, or 0 on error
 u32 gbm_decode_frame(const u8 *data, u32 offset, u16 *dst, const u16 *ref);
 
