@@ -1,0 +1,11 @@
+# Build outputs
+build/
+*.elf
+*.gba
+*.sav
+*.map
+
+# Editor files
+*.swp
+*~
+.vscode/
