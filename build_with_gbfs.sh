@@ -50,22 +50,30 @@ for f in $GBS_FILES; do
     echo "  - $f"
 done
 
-# Pad ROM to 256-byte boundary (required for GBFS search)
+# Output filename
+OUTPUT_ROM="gba_audio_decoder_gbfs.gba"
+
+# Copy ROM to output file (preserve original)
+echo "Copying ROM to $OUTPUT_ROM..."
+cp gba_audio_decoder.gba "$OUTPUT_ROM"
+
+# Pad output ROM to 256-byte boundary (required for GBFS search)
 echo "Padding ROM..."
-$PADBIN_CMD 256 gba_audio_decoder.gba
+$PADBIN_CMD 256 "$OUTPUT_ROM"
 
 # Create GBFS archive
 echo "Creating GBFS archive..."
 $GBFS_CMD audio_data.gbfs $GBS_FILES
 
-# Append GBFS to ROM
+# Append GBFS to output ROM
 echo "Appending GBFS to ROM..."
-cat audio_data.gbfs >> gba_audio_decoder.gba
+cat audio_data.gbfs >> "$OUTPUT_ROM"
 
 # Clean up
 rm -f audio_data.gbfs
 
 # Show result
 echo ""
-echo "Done! Output: gba_audio_decoder.gba"
-ls -la gba_audio_decoder.gba
+echo "Done! Output: $OUTPUT_ROM"
+echo "(Original gba_audio_decoder.gba preserved)"
+ls -la "$OUTPUT_ROM"
