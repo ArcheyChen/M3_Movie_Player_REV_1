@@ -5,6 +5,10 @@ build/
 *.sav
 *.map
 
+# Media data files (too large for git)
+data/*.gbs
+data/*.gbm
+
 # Editor files
 *.swp
 *~

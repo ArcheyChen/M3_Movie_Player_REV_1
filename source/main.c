@@ -1,118 +1,187 @@
 /*
- * GBS Audio Player - Test Program
+ * GBA Media Player
  *
- * Simple test/demo for the GBS audio library.
- * Supports loading audio from GBFS or embedded data.
+ * Combined video (GBM) and audio (GBS) player.
+ * Loads media files from GBFS filesystem.
+ *
+ * Note: Currently no A/V sync - just plays both independently.
  */
 
+#include <gba.h>
 #include <gba_console.h>
 #include <gba_interrupt.h>
 #include <gba_input.h>
 #include <gba_systemcalls.h>
 #include <gba_video.h>
 #include <stdio.h>
+#include <string.h>
 
+#include "media_source.h"
 #include "gbs_audio.h"
-#include "audio_source.h"
+#include "gbm_decoder.h"
 
-static const char* mode_names[] = {
-    "Stereo 4-bit",
-    "Mono 3-bit",
-    "Mono 4-bit",
-    "Mono 2-bit",
-    "Mono 2-bit SM",
-    "Invalid"
-};
+// EWRAM buffer for video frame (240 * 160 = 38400 pixels)
+__attribute__((section(".ewram"))) u16 frame_buffer[38400];
 
-static const char* source_names[] = {
-    "None",
-    "Embedded",
-    "GBFS",
-    "SD Card"
-};
+// State
+static bool has_video = false;
+static bool has_audio = false;
+static const uint8_t* video_data = NULL;
+static uint32_t video_offset = GBM_HEADER_SIZE;
+static uint32_t video_size = 0;
+
+static void show_error(const char* msg) {
+    consoleDemoInit();
+    iprintf("\x1b[2J");
+    iprintf("GBA Media Player\n");
+    iprintf("================\n\n");
+    iprintf("Error: %s\n", msg);
+    while (1) VBlankIntrWait();
+}
+
+static void show_info(void) {
+    iprintf("\x1b[2J");
+    iprintf("GBA Media Player\n");
+    iprintf("================\n\n");
+
+    if (has_video) {
+        iprintf("Video: Yes (%lu KB)\n", (unsigned long)(video_size / 1024));
+    } else {
+        iprintf("Video: Not found\n");
+    }
+
+    if (has_audio) {
+        const GbsAudioInfo* info = gbs_audio_get_info();
+        uint32_t duration = info->total_samples / info->sample_rate;
+        iprintf("Audio: Mode %d, %lu sec\n", info->mode, (unsigned long)duration);
+    } else {
+        iprintf("Audio: Not found\n");
+    }
+
+    iprintf("\nStarting playback...\n");
+}
+
+static void init_video_display(void) {
+    // Mode 3: 240x160, 15-bit color
+    SetMode(MODE_3 | BG2_ENABLE);
+
+    // Clear buffers
+    memset(frame_buffer, 0, sizeof(frame_buffer));
+
+    // Clear VRAM
+    u16* vram = (u16*)0x06000000;
+    for (int i = 0; i < 38400; i++) {
+        vram[i] = 0;
+    }
+}
+
+static void decode_and_display_frame(void) {
+    if (!has_video || !video_data) return;
+
+    // Check for end of video
+    if (video_offset + 2 >= video_size) {
+        // Loop video
+        video_offset = GBM_HEADER_SIZE;
+    }
+
+    // Read frame length
+    uint16_t frame_len = video_data[video_offset] | (video_data[video_offset + 1] << 8);
+
+    // Check for invalid frame
+    if (frame_len == 0 || frame_len == 0xFFFF) {
+        video_offset = GBM_HEADER_SIZE;
+        frame_len = video_data[video_offset] | (video_data[video_offset + 1] << 8);
+    }
+
+    // Decode frame (dst = EWRAM buffer, ref = VRAM for delta)
+    uint32_t next_off = gbm_decode_frame(video_data, video_offset, frame_buffer, (const u16*)0x06000000);
+
+    // Wait for VBlank
+    VBlankIntrWait();
+
+    // Copy to VRAM using DMA
+    dmaCopy(frame_buffer, (void*)0x06000000, 240 * 160 * 2);
+
+    video_offset = next_off;
+}
 
 int main(void) {
     // Initialize interrupts
     irqInit();
     irqEnable(IRQ_VBLANK);
 
-    // Initialize console
+    // Initialize media source
+    if (!media_source_init()) {
+        show_error("No GBFS found!\nAppend media with GBFS.");
+    }
+
+    // Try to load video
+    MediaSourceInfo video_info;
+    if (media_source_find_gbm(&video_info)) {
+        // Validate GBM header
+        if (video_info.size >= GBM_HEADER_SIZE &&
+            video_info.data[0] == 'G' && video_info.data[1] == 'B' &&
+            video_info.data[2] == 'A' && video_info.data[3] == 'M') {
+            has_video = true;
+            video_data = video_info.data;
+            video_size = video_info.size;
+        }
+    }
+
+    // Try to load audio
+    MediaSourceInfo audio_info;
+    if (media_source_find_gbs(&audio_info)) {
+        if (gbs_audio_init(audio_info.data, audio_info.size)) {
+            has_audio = true;
+        }
+    }
+
+    // Must have at least one media type
+    if (!has_video && !has_audio) {
+        show_error("No media files found!\nAdd .gbm or .gbs files.");
+    }
+
+    // Show info briefly
     consoleDemoInit();
+    show_info();
 
-    iprintf("\x1b[2J");  // Clear screen
-    iprintf("GBS Audio Player\n");
-    iprintf("================\n\n");
-
-    // Initialize audio source
-    if (!audio_source_init()) {
-        iprintf("Error: No audio source!\n");
-        iprintf("Append GBFS with .gbs file\n");
-        while (1) VBlankIntrWait();
+    // Wait a moment to show info
+    for (int i = 0; i < 120; i++) {
+        VBlankIntrWait();
     }
-
-    // Find first GBS file
-    AudioSourceInfo source_info;
-    if (!audio_source_find_gbs(&source_info)) {
-        iprintf("Error: No GBS file found!\n");
-        while (1) VBlankIntrWait();
-    }
-
-    iprintf("Source: %s\n", source_names[source_info.type]);
-    iprintf("File: %s\n", source_info.filename);
-    iprintf("Size: %lu bytes\n\n", (unsigned long)source_info.size);
-
-    // Initialize audio
-    if (!gbs_audio_init(source_info.data, source_info.size)) {
-        iprintf("Error: Invalid GBS file!\n");
-        while (1) VBlankIntrWait();
-    }
-
-    // Display info
-    const GbsAudioInfo* info = gbs_audio_get_info();
-
-    iprintf("Mode: %d (%s)\n", info->mode, mode_names[info->mode]);
-    iprintf("Rate: %lu Hz\n", (unsigned long)info->sample_rate);
-    iprintf("Channels: %d\n", info->channels);
-
-    uint32_t duration = info->total_samples / info->sample_rate;
-    iprintf("Duration: %lu sec\n\n", (unsigned long)duration);
-
-    iprintf("Controls:\n");
-    iprintf("  START: Restart\n");
-    iprintf("  SELECT: Stop/Play\n\n");
 
     // Start playback
-    gbs_audio_start();
-    iprintf("Status: Playing\n");
+    if (has_video) {
+        init_video_display();
+    }
+
+    if (has_audio) {
+        gbs_audio_start();
+    }
 
     // Main loop
     while (1) {
-        VBlankIntrWait();
-
-        scanKeys();
-        uint16_t keys = keysDown();
-
-        if (keys & KEY_START) {
-            gbs_audio_restart();
-            iprintf("\x1b[16;0HStatus: Playing   ");
-        }
-
-        if (keys & KEY_SELECT) {
-            if (gbs_audio_is_playing()) {
-                gbs_audio_stop();
-                iprintf("\x1b[16;0HStatus: Stopped   ");
-            } else if (!gbs_audio_is_finished()) {
-                gbs_audio_start();
-                iprintf("\x1b[16;0HStatus: Playing   ");
-            }
-        }
-
-        // Update progress
-        uint32_t progress = gbs_audio_get_progress();
-        if (gbs_audio_is_finished()) {
-            iprintf("\x1b[17;0HProgress: Done!   ");
+        if (has_video) {
+            decode_and_display_frame();
         } else {
-            iprintf("\x1b[17;0HProgress: %lu%%    ", (unsigned long)progress);
+            // Audio only - just wait for VBlank
+            VBlankIntrWait();
+        }
+
+        // Handle audio looping
+        if (has_audio && gbs_audio_is_finished()) {
+            gbs_audio_restart();
+        }
+
+        // Check for restart (START button)
+        scanKeys();
+        if (keysDown() & KEY_START) {
+            if (has_video) {
+                video_offset = GBM_HEADER_SIZE;
+            }
+            if (has_audio) {
+                gbs_audio_restart();
+            }
         }
     }
 

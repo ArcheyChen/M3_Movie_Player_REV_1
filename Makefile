@@ -27,14 +27,6 @@ INCLUDES	:= include
 DATA		:=
 MUSIC		:=
 
-# Set to 1 to use embedded audio (compile audio.gbs into ROM)
-# Set to 0 to use GBFS only (append GBFS archive to ROM)
-USE_EMBEDDED	:= 0
-
-ifneq ($(USE_EMBEDDED),0)
-DATA		:= data
-endif
-
 #---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
@@ -43,10 +35,6 @@ ARCH	:=	-mthumb -mthumb-interwork
 CFLAGS	:=	-g -Wall -O2\
 		-mcpu=arm7tdmi -mtune=arm7tdmi\
 		$(ARCH)
-
-ifneq ($(USE_EMBEDDED),0)
-CFLAGS	+=	-DUSE_EMBEDDED_AUDIO
-endif
 
 CFLAGS	+=	$(INCLUDE)
 
@@ -164,14 +152,6 @@ soundbank.bin soundbank.h : $(AUDIOFILES)
 # This rule links in binary data with the .bin extension
 #---------------------------------------------------------------------------------
 %.bin.o	%_bin.h :	%.bin
-#---------------------------------------------------------------------------------
-	@echo $(notdir $<)
-	@$(bin2o)
-
-#---------------------------------------------------------------------------------
-# This rule links in binary data with the .gbs extension
-#---------------------------------------------------------------------------------
-%.gbs.o	%_gbs.h :	%.gbs
 #---------------------------------------------------------------------------------
 	@echo $(notdir $<)
 	@$(bin2o)
