@@ -95,22 +95,17 @@ static inline u8 read_code(DecodeContext *ctx) {
 }
 
 // Block operations - Hot path
+// dst is always 4-byte aligned (block starts at 8x8 boundaries)
+// Use 32-bit writes to EWRAM for better throughput
 static IWRAM_CODE void copy_u32_block(DecodeContext *ctx, int dst_off, int ref_off, int rows, int words) {
-    // Manual loop unrolling or optimization could help here
     for (int r = 0; r < rows; r++) {
-        // Pre-calculate row pointers
-        u16 *d = ctx->dst + (dst_off >> 1);
+        u32 *d = (u32*)(ctx->dst + (dst_off >> 1));
         const u16 *s = ctx->ref + (ref_off >> 1);
-        
+
         for (int i = 0; i < words; i++) {
-            // Copy 2 pixels (32-bit) at a time if aligned?
-            // ctx->dst and ctx->ref are u16*. 
-            // We can treat them as u32* if they are 4-byte aligned.
-            // (dst_off >> 1) is pixel index. If pixel index is even, it's 4-byte aligned.
-            // However, offsets might be odd pixels (2 bytes aligned).
-            // Let's stick to u16 copy to be safe, but maybe unroll.
-            d[i * 2] = s[i * 2];
-            d[i * 2 + 1] = s[i * 2 + 1];
+            // Read two u16 from ref (VRAM), write as u32 to dst (EWRAM)
+            u32 val = s[i * 2] | ((u32)s[i * 2 + 1] << 16);
+            d[i] = val;
         }
         dst_off += ROW_BYTES;
         ref_off += ROW_BYTES;
@@ -118,11 +113,11 @@ static IWRAM_CODE void copy_u32_block(DecodeContext *ctx, int dst_off, int ref_o
 }
 
 static IWRAM_CODE void fill_u32_block(DecodeContext *ctx, int dst_off, int rows, int words, u16 color) {
+    u32 color32 = color | ((u32)color << 16);
     for (int r = 0; r < rows; r++) {
-        u16 *d = ctx->dst + (dst_off >> 1);
+        u32 *d = (u32*)(ctx->dst + (dst_off >> 1));
         for (int i = 0; i < words; i++) {
-            d[i * 2] = color;
-            d[i * 2 + 1] = color;
+            d[i] = color32;
         }
         dst_off += ROW_BYTES;
     }
@@ -130,11 +125,12 @@ static IWRAM_CODE void fill_u32_block(DecodeContext *ctx, int dst_off, int rows,
 
 static IWRAM_CODE void delta_u32_block(DecodeContext *ctx, int dst_off, int ref_off, int rows, int words, s16 delta) {
     for (int r = 0; r < rows; r++) {
-        u16 *d = ctx->dst + (dst_off >> 1);
+        u32 *d = (u32*)(ctx->dst + (dst_off >> 1));
         const u16 *s = ctx->ref + (ref_off >> 1);
         for (int i = 0; i < words; i++) {
-            d[i * 2] = s[i * 2] + delta;
-            d[i * 2 + 1] = s[i * 2 + 1] + delta;
+            u16 v0 = s[i * 2] + delta;
+            u16 v1 = s[i * 2 + 1] + delta;
+            d[i] = v0 | ((u32)v1 << 16);
         }
         dst_off += ROW_BYTES;
         ref_off += ROW_BYTES;
