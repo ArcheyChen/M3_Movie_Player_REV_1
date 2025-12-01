@@ -3,9 +3,9 @@
 
 #define ROW_BYTES (FRAME_WIDTH * 2)
 
-// Codebook offsets
-// Putting this in const (ROM) is fine, cache handles it.
-static const s16 CODEBOOK_OFFSETS[] = {
+// Codebook offsets - place in IWRAM for fast access (256 bytes)
+// Use .iwram.rodata to avoid conflict with .iwram code section
+__attribute__((section(".iwram.rodata"))) static const s16 CODEBOOK_OFFSETS[] = {
     -3856, -3854, -3852, -3850, -3848, -3846, -3844, -3842,
     -3840, -3838, -3836, -3834, -3832, -3830, -3828, -3826,
     -3376, -3374, -3372, -3370, -3368, -3366, -3364, -3362,
