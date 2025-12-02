@@ -362,6 +362,7 @@ static struct {
 
     // Playback state
     volatile uint8_t active_buffer;
+    bool is_paused;
 
     // A/V sync: track minute boundaries using addition instead of division
     // samples_per_minute = sample_rate * 60 (precomputed at init)
@@ -985,6 +986,39 @@ void gbs_audio_stop(void) {
     irqDisable(IRQ_TIMER1);
     REG_SOUNDCNT_X = 0;
     state.info.is_playing = false;
+    state.is_paused = false;
+}
+
+void gbs_audio_pause(void) {
+    if (!state.info.is_playing || state.is_paused) return;
+
+    // Stop timers (this stops DMA triggers)
+    REG_TM0CNT_H = 0;
+    REG_TM1CNT_H = 0;
+
+    state.is_paused = true;
+}
+
+void gbs_audio_resume(void) {
+    if (!state.info.is_playing || !state.is_paused) return;
+
+    // Resume timers without resetting their counters
+    // Just re-enable the control bits, preserving current count values
+    uint16_t timer_reload = 65536 - (GBA_MASTER_CLOCK / state.info.sample_rate);
+
+    // Timer0: sample rate timer
+    REG_TM0CNT_L = timer_reload;
+    REG_TM0CNT_H = TIMER_START;
+
+    // Timer1: cascade counter - resume with current count
+    // Don't write to TM1CNT_L to preserve count position
+    REG_TM1CNT_H = TIMER_IRQ | TIMER_CASCADE | TIMER_START;
+
+    state.is_paused = false;
+}
+
+bool gbs_audio_is_paused(void) {
+    return state.is_paused;
 }
 
 void gbs_audio_restart(void) {

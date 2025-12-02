@@ -56,6 +56,21 @@ void gbs_audio_start(void);
 void gbs_audio_stop(void);
 
 /*
+ * Pause audio playback (can be resumed).
+ */
+void gbs_audio_pause(void);
+
+/*
+ * Resume audio playback after pause.
+ */
+void gbs_audio_resume(void);
+
+/*
+ * Check if audio is paused.
+ */
+bool gbs_audio_is_paused(void);
+
+/*
  * Restart playback from beginning.
  */
 void gbs_audio_restart(void);

@@ -7,6 +7,7 @@
  * Features:
  * - 10 FPS video with frame rate control
  * - A/V sync every 600 frames (1 minute) at I-frames
+ * - A button to pause/resume
  * - L/R buttons for seeking by minute
  * - START button to restart from beginning
  */
@@ -75,8 +76,14 @@ static u32 current_frame = 0;
 // For tracking current minute (for sync and seeking)
 static u32 current_minute = 0;
 
+// Pause state
+static bool is_paused = false;
+
 static void vblank_handler(void) {
     // Called at 60 Hz, increment target_frame every 6 VBlanks (10 FPS)
+    // Don't increment when paused
+    if (is_paused) return;
+
     static u8 vblank_counter = 0;
     vblank_counter++;
     if (vblank_counter >= VBLANKS_PER_FRAME) {
@@ -196,6 +203,23 @@ static void seek_to_minute(u32 minute) {
     current_minute = minute;
 }
 
+// Toggle pause state for both audio and video
+static void toggle_pause(void) {
+    if (is_paused) {
+        // Resume
+        is_paused = false;
+        if (has_audio) {
+            gbs_audio_resume();
+        }
+    } else {
+        // Pause
+        is_paused = true;
+        if (has_audio) {
+            gbs_audio_pause();
+        }
+    }
+}
+
 // Decode next frame into frame_buffer (does not display)
 static void decode_next_frame(void) {
     if (!has_video || !video_data) return;
@@ -236,6 +260,45 @@ static void check_audio_sync(void) {
     }
 }
 
+// Handle input, returns true if pause state changed
+static bool handle_input(void) {
+    scanKeys();
+    u16 keys = keysDown();
+
+    // A: toggle pause/resume
+    if (keys & KEY_A) {
+        toggle_pause();
+        return true;
+    }
+
+    // START: restart from beginning
+    if (keys & KEY_START) {
+        if (is_paused) {
+            toggle_pause();  // Resume first
+        }
+        seek_to_minute(0);
+    }
+
+    // R: skip forward 1 minute
+    if (keys & KEY_R) {
+        u32 next_minute = current_minute + 1;
+        if (next_minute < total_minutes) {
+            seek_to_minute(next_minute);
+        }
+    }
+
+    // L: skip backward 1 minute
+    if (keys & KEY_L) {
+        if (current_minute > 0) {
+            seek_to_minute(current_minute - 1);
+        } else {
+            seek_to_minute(0);  // Go to start
+        }
+    }
+
+    return false;
+}
+
 // Process video frames with frame rate control
 // Flow: decode -> wait for timing -> display -> repeat
 static void process_video(void) {
@@ -243,8 +306,10 @@ static void process_video(void) {
     decode_next_frame();
 
     // Wait until it's time to display
+    // Also check input during wait so pause can be toggled
     while (current_frame >= target_frame) {
         VBlankIntrWait();
+        handle_input();
     }
 
     // Display the pre-decoded frame
@@ -331,8 +396,9 @@ int main(void) {
         if (has_video) {
             process_video();
         } else {
-            // Audio only - just wait for VBlank
+            // Audio only - just wait for VBlank and handle input
             VBlankIntrWait();
+            handle_input();
         }
 
         // Handle audio looping
@@ -340,32 +406,6 @@ int main(void) {
             gbs_audio_restart();
             if (has_video) {
                 seek_to_minute(0);  // Sync video when audio loops
-            }
-        }
-
-        // Handle input
-        scanKeys();
-        u16 keys = keysDown();
-
-        // START: restart from beginning
-        if (keys & KEY_START) {
-            seek_to_minute(0);
-        }
-
-        // R: skip forward 1 minute
-        if (keys & KEY_R) {
-            u32 next_minute = current_minute + 1;
-            if (next_minute < total_minutes) {
-                seek_to_minute(next_minute);
-            }
-        }
-
-        // L: skip backward 1 minute
-        if (keys & KEY_L) {
-            if (current_minute > 0) {
-                seek_to_minute(current_minute - 1);
-            } else {
-                seek_to_minute(0);  // Go to start
             }
         }
     }
