@@ -56,6 +56,25 @@ static const uint8_t* video_data = NULL;
 static uint32_t video_offset = GBM_HEADER_SIZE;
 static uint32_t video_size = 0;
 
+// Frame rate control
+// Video is 10 FPS, VBlank is 60 Hz, so 1 frame = 6 VBlanks
+#define VBLANKS_PER_FRAME 6
+
+// target_frame: incremented by VBlank ISR, represents "should have displayed this many frames"
+// current_frame: maintained by main loop, represents "have decoded this many frames"
+static volatile u32 target_frame = 0;
+static u32 current_frame = 0;
+
+static void vblank_handler(void) {
+    // Called at 60 Hz, increment target_frame every 6 VBlanks (10 FPS)
+    static u8 vblank_counter = 0;
+    vblank_counter++;
+    if (vblank_counter >= VBLANKS_PER_FRAME) {
+        vblank_counter = 0;
+        target_frame++;
+    }
+}
+
 static void show_error(const char* msg) {
     consoleDemoInit();
     iprintf("\x1b[2J");
@@ -101,7 +120,8 @@ static void init_video_display(void) {
     }
 }
 
-static void decode_and_display_frame(void) {
+// Decode next frame into frame_buffer (does not display)
+static void decode_next_frame(void) {
     if (!has_video || !video_data) return;
 
     // Check for end of video
@@ -120,21 +140,29 @@ static void decode_and_display_frame(void) {
     }
 
     // Decode frame (dst = EWRAM buffer, ref = VRAM for delta)
-    uint32_t next_off = gbm_decode_frame(video_data, video_offset, frame_buffer, (const u16*)0x06000000);
+    video_offset = gbm_decode_frame(video_data, video_offset, frame_buffer, (const u16*)0x06000000);
+}
 
-    // Wait for VBlank
-    VBlankIntrWait();
+// Process video frames with frame rate control
+// Flow: decode -> wait for timing -> display -> repeat
+static void process_video(void) {
+    // Decode next frame first (into frame_buffer)
+    decode_next_frame();
 
-    // Copy to VRAM using CPU (ldmia/stmia) instead of DMA
-    // CPU access allows audio DMA to interleave, preventing audio stutter
+    // Wait until it's time to display
+    while (current_frame >= target_frame) {
+        VBlankIntrWait();
+    }
+
+    // Display the pre-decoded frame
     copy_frame_to_vram(frame_buffer, (void*)0x06000000, 240 * 160 * 2);
-
-    video_offset = next_off;
+    current_frame++;
 }
 
 int main(void) {
     // Initialize interrupts
     irqInit();
+    irqSet(IRQ_VBLANK, vblank_handler);
     irqEnable(IRQ_VBLANK);
 
     // Initialize media source
@@ -186,10 +214,14 @@ int main(void) {
         gbs_audio_start();
     }
 
+    // Reset frame counters
+    target_frame = 0;
+    current_frame = 0;
+
     // Main loop
     while (1) {
         if (has_video) {
-            decode_and_display_frame();
+            process_video();
         } else {
             // Audio only - just wait for VBlank
             VBlankIntrWait();
@@ -205,6 +237,8 @@ int main(void) {
         if (keysDown() & KEY_START) {
             if (has_video) {
                 video_offset = GBM_HEADER_SIZE;
+                target_frame = 0;
+                current_frame = 0;
             }
             if (has_audio) {
                 gbs_audio_restart();
