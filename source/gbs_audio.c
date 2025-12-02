@@ -314,6 +314,7 @@ static IWRAM_CODE void advance_to_next_block(void) {
 static IWRAM_CODE void decode_buffer_stereo_4bit(int8_t* left, int8_t* right, uint32_t count) {
     const uint8_t* block = get_current_block();
     uint32_t data_per_block = state.info.block_size - state.block_header_size;
+    uint32_t decoded = 0;
 
     for (uint32_t i = 0; i < count; i++) {
         if (state.info.is_finished) {
@@ -343,14 +344,16 @@ static IWRAM_CODE void decode_buffer_stereo_4bit(int8_t* left, int8_t* right, ui
         left[i] = (int8_t)(sample_l >> 8);
         right[i] = (int8_t)(sample_r >> 8);
 
-        state.info.samples_decoded++;
+        decoded++;
     }
+    state.info.samples_decoded += decoded;
 }
 
 // Mode 1: Mono 3-bit ADPCM (8 samples per 3 bytes)
 static IWRAM_CODE void decode_buffer_mono_3bit(int8_t* dest, uint32_t count) {
     const uint8_t* block = get_current_block();
     uint32_t data_per_block = state.info.block_size - state.block_header_size;
+    uint32_t decoded = 0;
 
     for (uint32_t i = 0; i < count; i++) {
         if (state.info.is_finished) {
@@ -362,7 +365,7 @@ static IWRAM_CODE void decode_buffer_mono_3bit(int8_t* dest, uint32_t count) {
         if (state.samples_buffered > 0) {
             dest[i] = (int8_t)(state.buffered_samples[8 - state.samples_buffered] >> 8);
             state.samples_buffered--;
-            state.info.samples_decoded++;
+            decoded++;
             continue;
         }
 
@@ -393,14 +396,16 @@ static IWRAM_CODE void decode_buffer_mono_3bit(int8_t* dest, uint32_t count) {
         // Output first sample, buffer the rest
         dest[i] = (int8_t)(state.buffered_samples[0] >> 8);
         state.samples_buffered = 7;
-        state.info.samples_decoded++;
+        decoded++;
     }
+    state.info.samples_decoded += decoded;
 }
 
 // Mode 2: Mono 4-bit IMA ADPCM
 static IWRAM_CODE void decode_buffer_mono_4bit(int8_t* dest, uint32_t count) {
     const uint8_t* block = get_current_block();
     uint32_t data_per_block = state.info.block_size - state.block_header_size;
+    uint32_t decoded = 0;
 
     for (uint32_t i = 0; i < count; i++) {
         if (state.info.is_finished) {
@@ -412,7 +417,7 @@ static IWRAM_CODE void decode_buffer_mono_4bit(int8_t* dest, uint32_t count) {
         if (state.have_high_nibble) {
             dest[i] = (int8_t)(state.high_nibble_sample >> 8);
             state.have_high_nibble = false;
-            state.info.samples_decoded++;
+            decoded++;
             continue;
         }
 
@@ -432,18 +437,20 @@ static IWRAM_CODE void decode_buffer_mono_4bit(int8_t* dest, uint32_t count) {
         // Low nibble first
         int16_t sample_lo = decode_ima_4bit(byte & 0x0F, &state.left);
         dest[i] = (int8_t)(sample_lo >> 8);
-        state.info.samples_decoded++;
+        decoded++;
 
         // Buffer high nibble for next iteration
         state.high_nibble_sample = decode_ima_4bit((byte >> 4) & 0x0F, &state.left);
         state.have_high_nibble = true;
     }
+    state.info.samples_decoded += decoded;
 }
 
 // Mode 3/4: Mono 2-bit ADPCM (4 samples per byte)
 static IWRAM_CODE void decode_buffer_mono_2bit(int8_t* dest, uint32_t count) {
     const uint8_t* block = get_current_block();
     uint32_t data_per_block = state.info.block_size - state.block_header_size;
+    uint32_t decoded = 0;
 
     for (uint32_t i = 0; i < count; i++) {
         if (state.info.is_finished) {
@@ -455,7 +462,7 @@ static IWRAM_CODE void decode_buffer_mono_2bit(int8_t* dest, uint32_t count) {
         if (state.samples_buffered > 0) {
             dest[i] = (int8_t)(state.buffered_samples[4 - state.samples_buffered] >> 8);
             state.samples_buffered--;
-            state.info.samples_decoded++;
+            decoded++;
             continue;
         }
 
@@ -481,11 +488,13 @@ static IWRAM_CODE void decode_buffer_mono_2bit(int8_t* dest, uint32_t count) {
         // Output first sample, buffer the rest
         dest[i] = (int8_t)(state.buffered_samples[0] >> 8);
         state.samples_buffered = 3;
-        state.info.samples_decoded++;
+        decoded++;
     }
+    state.info.samples_decoded += decoded;
 }
 
 // Dispatch to appropriate decoder
+// Note: For mono modes, right is always NULL (DMA2 not used), so no need to clear it
 static IWRAM_CODE void decode_buffer(int8_t* left, int8_t* right, uint32_t count) {
     switch (state.info.mode) {
         case GBS_MODE_STEREO_4BIT:
@@ -493,20 +502,16 @@ static IWRAM_CODE void decode_buffer(int8_t* left, int8_t* right, uint32_t count
             break;
         case GBS_MODE_MONO_3BIT:
             decode_buffer_mono_3bit(left, count);
-            if (right) memset(right, 0, count);  // Clear unused right channel
             break;
         case GBS_MODE_MONO_4BIT:
             decode_buffer_mono_4bit(left, count);
-            if (right) memset(right, 0, count);
             break;
         case GBS_MODE_MONO_2BIT:
         case GBS_MODE_MONO_2BIT_SM:
             decode_buffer_mono_2bit(left, count);
-            if (right) memset(right, 0, count);
             break;
         default:
             memset(left, 0, count);
-            if (right) memset(right, 0, count);
             break;
     }
 }
