@@ -38,7 +38,7 @@
 // ============================================================================
 
 // Standard IMA ADPCM step table (89 entries)
-static const int16_t ima_step_table[89] = {
+__attribute__((section(".iwram.rodata"))) static const int16_t ima_step_table[89] = {
     7, 8, 9, 10, 11, 12, 13, 14, 16, 17,
     19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
     50, 55, 60, 66, 73, 80, 88, 97, 107, 118,
@@ -51,19 +51,19 @@ static const int16_t ima_step_table[89] = {
 };
 
 // Standard IMA ADPCM index adjustment table (4-bit)
-static const int8_t ima_index_table[16] = {
+__attribute__((section(".iwram.rodata"))) static const int8_t ima_index_table[16] = {
     -1, -1, -1, -1, 2, 4, 6, 8,
     -1, -1, -1, -1, 2, 4, 6, 8
 };
 
 // 3-bit ADPCM index adjustment table (from savemu.dll)
-static const int8_t adpcm3_index_table[8] = {
+__attribute__((section(".iwram.rodata"))) static const int8_t adpcm3_index_table[8] = {
     -1, -1, 2, 6, -1, -1, 2, 6
 };
 
 // 2-bit ADPCM delta table (from savemu.dll 0x1000e388)
 // 356 entries: 89 step levels * 4 codes
-static const int16_t adpcm2_delta_table[356] = {
+__attribute__((section(".iwram.rodata"))) static const int16_t adpcm2_delta_table[356] = {
     3, 10, -3, -10, 4, 12, -4, -12,
     4, 13, -4, -13, 5, 15, -5, -15,
     5, 16, -5, -16, 6, 18, -6, -18,

@@ -54,16 +54,23 @@ static inline u16 read_u16_unaligned(const u8 *ptr) {
 // Critical Path: next_bit
 // Placing in IWRAM
 static IWRAM_CODE int next_bit(DecodeContext *ctx) {
-    if(ctx->state == (1<<31)){
+    if (ctx->state == (1u << 31)) {
         u32 word = read_u32_unaligned(ctx->flag_ptr);
         ctx->flag_ptr += 4;
-        int bit = (word >> 31);
+        int bit = word >> 31;
         ctx->state = (word << 1) | 1;
         return bit;
     }
     int bit = ctx->state >> 31;
-    ctx->state = (ctx->state << 1);
+    ctx->state <<= 1;
     return bit;
+}
+
+// Read 2 bits at once - optimized for common decode patterns
+static IWRAM_CODE int next_2bits(DecodeContext *ctx) {
+    int bit0 = next_bit(ctx);
+    int bit1 = next_bit(ctx);
+    return (bit0 << 1) | bit1;
 }
 
 static inline u16 read_palette_color(DecodeContext *ctx) {
@@ -185,17 +192,17 @@ static IWRAM_CODE void decode_block_2x1(DecodeContext *ctx);
 
 // Functions
 static IWRAM_CODE void decode_block_8x8(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 8, 4);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 8, 4);
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 8, 4);
         }
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
+        break;
+    case 2: // 10: subdivide
         if (next_bit(ctx) == 0) {
             decode_block_8x4(ctx);
             decode_block_8x4(ctx);
@@ -203,443 +210,473 @@ static IWRAM_CODE void decode_block_8x8(DecodeContext *ctx) {
             decode_block_4x8(ctx);
             decode_block_4x8(ctx);
         }
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 8, 4, color);
-    } else {
-        u16 color = read_palette_color(ctx);
-        fill_u32_block(ctx, ctx->block_offset, 8, 4, color);
+        break;
+    case 3: // 11: delta or fill
+        if (next_bit(ctx) == 0) {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 8, 4, color);
+        } else {
+            u16 color = read_palette_color(ctx);
+            fill_u32_block(ctx, ctx->block_offset, 8, 4, color);
+        }
+        break;
     }
 }
 
 static IWRAM_CODE void decode_block_8x4(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 4, 4);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 4, 4);
+        ctx->block_offset += 0x780;
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 4, 4);
         }
         ctx->block_offset += 0x780;
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) != 0) {
+        break;
+    case 2: // 10: subdivide
+        if (next_bit(ctx) == 0) {
+            decode_block_8x2(ctx);
+            decode_block_8x2(ctx);
+        } else {
             decode_block_4x4(ctx);
             decode_block_4x4(ctx);
             ctx->block_offset += 0x770;
-            return;
         }
-        decode_block_8x2(ctx);
-        decode_block_8x2(ctx);
-        return;
+        break;
+    case 3: // 11: delta or fill
+        if (next_bit(ctx) == 0) {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 4, 4, color);
+        } else {
+            u16 color = read_palette_color(ctx);
+            fill_u32_block(ctx, ctx->block_offset, 4, 4, color);
+        }
+        ctx->block_offset += 0x780;
+        break;
     }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 4, 4, color);
-    } else {
-        u16 color = read_palette_color(ctx);
-        fill_u32_block(ctx, ctx->block_offset, 4, 4, color);
-    }
-    ctx->block_offset += 0x780;
 }
 
 static IWRAM_CODE void decode_block_4x8(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 8, 2);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 8, 2);
+        ctx->block_offset += 8;
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 8, 2);
         }
         ctx->block_offset += 8;
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) != 0) {
+        break;
+    case 2: // 10: subdivide
+        if (next_bit(ctx) == 0) {
+            decode_block_4x4(ctx);
+            ctx->block_offset += 0x778;
+            decode_block_4x4(ctx);
+            ctx->block_offset -= 0x780;
+        } else {
             decode_block_2x8(ctx);
             decode_block_2x8(ctx);
-            return;
         }
-        decode_block_4x4(ctx);
-        ctx->block_offset += 0x778;
-        decode_block_4x4(ctx);
-        ctx->block_offset -= 0x780;
-        return;
+        break;
+    case 3: // 11: delta or fill
+        if (next_bit(ctx) == 0) {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 8, 2, color);
+        } else {
+            u16 color = read_palette_color(ctx);
+            fill_u32_block(ctx, ctx->block_offset, 8, 2, color);
+        }
+        ctx->block_offset += 8;
+        break;
     }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 8, 2, color);
-    } else {
-        u16 color = read_palette_color(ctx);
-        fill_u32_block(ctx, ctx->block_offset, 8, 2, color);
-    }
-    ctx->block_offset += 8;
 }
 
 static IWRAM_CODE void decode_block_2x8(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 8, 1);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 8, 1);
+        ctx->block_offset += 4;
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 8, 1);
         }
         ctx->block_offset += 4;
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) != 0) {
+        break;
+    case 2: // 10: subdivide
+        if (next_bit(ctx) == 0) {
+            decode_block_2x4(ctx);
+            ctx->block_offset += 0x77C;
+            decode_block_2x4(ctx);
+            ctx->block_offset -= 0x780;
+        } else {
             decode_block_1x8(ctx);
             decode_block_1x8(ctx);
-            return;
         }
-        decode_block_2x4(ctx);
-        ctx->block_offset += 0x77C;
-        decode_block_2x4(ctx);
-        ctx->block_offset -= 0x780;
-        return;
+        break;
+    case 3: // 11: delta or fill
+        if (next_bit(ctx) == 0) {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 8, 1, color);
+        } else {
+            u16 color = read_palette_color(ctx);
+            fill_u32_block(ctx, ctx->block_offset, 8, 1, color);
+        }
+        ctx->block_offset += 4;
+        break;
     }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 8, 1, color);
-    } else {
-        u16 color = read_palette_color(ctx);
-        fill_u32_block(ctx, ctx->block_offset, 8, 1, color);
-    }
-    ctx->block_offset += 4;
 }
 
 static IWRAM_CODE void decode_block_1x8(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u16_block(ctx, ctx->block_offset, ctx->block_offset, 8, 1);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u16_block(ctx, ctx->block_offset, ctx->block_offset, 8, 1);
+        ctx->block_offset += 2;
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u16_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 8, 1);
         }
         ctx->block_offset += 2;
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
+        break;
+    case 2: // 10: subdivide (only vertical split for 1xN)
         decode_block_1x4(ctx);
         ctx->block_offset += 0x77E;
         decode_block_1x4(ctx);
         ctx->block_offset -= 0x780;
-        return;
+        break;
+    case 3: // 11: delta or fill
+        if (next_bit(ctx) == 0) {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u16_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 8, 1, color);
+        } else {
+            u16 color = read_palette_color(ctx);
+            fill_u16_block(ctx, ctx->block_offset, 8, 1, color);
+        }
+        ctx->block_offset += 2;
+        break;
     }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u16_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 8, 1, color);
-    } else {
-        u16 color = read_palette_color(ctx);
-        fill_u16_block(ctx, ctx->block_offset, 8, 1, color);
-    }
-    ctx->block_offset += 2;
 }
 
 static IWRAM_CODE void decode_block_4x4(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 4, 2);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 4, 2);
+        ctx->block_offset += 8;
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 4, 2);
         }
         ctx->block_offset += 8;
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) != 0) {
+        break;
+    case 2: // 10: subdivide
+        if (next_bit(ctx) == 0) {
+            decode_block_4x2(ctx);
+            ctx->block_offset += 0x3B8;
+            decode_block_4x2(ctx);
+            ctx->block_offset -= 0x3C0;
+        } else {
             decode_block_2x4(ctx);
             decode_block_2x4(ctx);
-            return;
         }
-        decode_block_4x2(ctx);
-        ctx->block_offset += 0x3B8;
-        decode_block_4x2(ctx);
-        ctx->block_offset -= 0x3C0;
-        return;
+        break;
+    case 3: // 11: delta or fill
+        if (next_bit(ctx) == 0) {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 4, 2, color);
+        } else {
+            u16 color = read_palette_color(ctx);
+            fill_u32_block(ctx, ctx->block_offset, 4, 2, color);
+        }
+        ctx->block_offset += 8;
+        break;
     }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 4, 2, color);
-    } else {
-        u16 color = read_palette_color(ctx);
-        fill_u32_block(ctx, ctx->block_offset, 4, 2, color);
-    }
-    ctx->block_offset += 8;
 }
 
 static IWRAM_CODE void decode_block_8x2(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 2, 4);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 2, 4);
+        ctx->block_offset += 0x3C0;
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 2, 4);
         }
         ctx->block_offset += 0x3C0;
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) != 0) {
+        break;
+    case 2: // 10: subdivide
+        if (next_bit(ctx) == 0) {
+            decode_block_8x1(ctx);
+            decode_block_8x1(ctx);
+        } else {
             decode_block_4x2(ctx);
             decode_block_4x2(ctx);
             ctx->block_offset += 0x3B0;
-            return;
         }
-        decode_block_8x1(ctx);
-        decode_block_8x1(ctx);
-        return;
+        break;
+    case 3: // 11: delta or fill
+        if (next_bit(ctx) == 0) {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 2, 4, color);
+        } else {
+            u16 color = read_palette_color(ctx);
+            fill_u32_block(ctx, ctx->block_offset, 2, 4, color);
+        }
+        ctx->block_offset += 0x3C0;
+        break;
     }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 2, 4, color);
-    } else {
-        u16 color = read_palette_color(ctx);
-        fill_u32_block(ctx, ctx->block_offset, 2, 4, color);
-    }
-    ctx->block_offset += 0x3C0;
 }
 
 static IWRAM_CODE void decode_block_2x4(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 4, 1);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 4, 1);
+        ctx->block_offset += 4;
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 4, 1);
         }
         ctx->block_offset += 4;
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) != 0) {
+        break;
+    case 2: // 10: subdivide
+        if (next_bit(ctx) == 0) {
+            decode_block_2x2(ctx);
+            ctx->block_offset += 0x3BC;
+            decode_block_2x2(ctx);
+            ctx->block_offset -= 0x3C0;
+        } else {
             decode_block_1x4(ctx);
             decode_block_1x4(ctx);
-            return;
         }
-        decode_block_2x2(ctx);
-        ctx->block_offset += 0x3BC;
-        decode_block_2x2(ctx);
-        ctx->block_offset -= 0x3C0;
-        return;
+        break;
+    case 3: // 11: delta or fill
+        if (next_bit(ctx) == 0) {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 4, 1, color);
+        } else {
+            u16 color = read_palette_color(ctx);
+            fill_u32_block(ctx, ctx->block_offset, 4, 1, color);
+        }
+        ctx->block_offset += 4;
+        break;
     }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 4, 1, color);
-    } else {
-        u16 color = read_palette_color(ctx);
-        fill_u32_block(ctx, ctx->block_offset, 4, 1, color);
-    }
-    ctx->block_offset += 4;
 }
 
 static IWRAM_CODE void decode_block_4x2(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 2, 2);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 2, 2);
+        ctx->block_offset += 8;
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 2, 2);
         }
         ctx->block_offset += 8;
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) != 0) {
+        break;
+    case 2: // 10: subdivide
+        if (next_bit(ctx) == 0) {
+            decode_block_4x1(ctx);
+            ctx->block_offset += 0x1D8;
+            decode_block_4x1(ctx);
+            ctx->block_offset -= 0x1E0;
+        } else {
             decode_block_2x2(ctx);
             decode_block_2x2(ctx);
-            return;
         }
-        decode_block_4x1(ctx);
-        ctx->block_offset += 0x1D8;
-        decode_block_4x1(ctx);
-        ctx->block_offset -= 0x1E0;
-        return;
+        break;
+    case 3: // 11: delta or fill
+        if (next_bit(ctx) == 0) {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 2, 2, color);
+        } else {
+            u16 color = read_palette_color(ctx);
+            fill_u32_block(ctx, ctx->block_offset, 2, 2, color);
+        }
+        ctx->block_offset += 8;
+        break;
     }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 2, 2, color);
-    } else {
-        u16 color = read_palette_color(ctx);
-        fill_u32_block(ctx, ctx->block_offset, 2, 2, color);
-    }
-    ctx->block_offset += 8;
 }
 
 static IWRAM_CODE void decode_block_8x1(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 1, 4);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 1, 4);
+        ctx->block_offset += 0x1E0;
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 1, 4);
         }
         ctx->block_offset += 0x1E0;
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
+        break;
+    case 2: // 10: subdivide (only horizontal split for Nx1)
         decode_block_4x1(ctx);
         decode_block_4x1(ctx);
         ctx->block_offset += 0x1D0;
-        return;
+        break;
+    case 3: // 11: delta or fill
+        if (next_bit(ctx) == 0) {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 1, 4, color);
+        } else {
+            u16 color = read_palette_color(ctx);
+            fill_u32_block(ctx, ctx->block_offset, 1, 4, color);
+        }
+        ctx->block_offset += 0x1E0;
+        break;
     }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 1, 4, color);
-    } else {
-        u16 color = read_palette_color(ctx);
-        fill_u32_block(ctx, ctx->block_offset, 1, 4, color);
-    }
-    ctx->block_offset += 0x1E0;
 }
 
 static IWRAM_CODE void decode_block_1x4(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u16_block(ctx, ctx->block_offset, ctx->block_offset, 4, 1);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u16_block(ctx, ctx->block_offset, ctx->block_offset, 4, 1);
+        ctx->block_offset += 2;
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u16_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 4, 1);
         }
         ctx->block_offset += 2;
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
+        break;
+    case 2: // 10: subdivide (only vertical split for 1xN)
         decode_block_1x2(ctx);
         ctx->block_offset += 0x3BE;
         decode_block_1x2(ctx);
         ctx->block_offset -= 0x3C0;
-        return;
+        break;
+    case 3: // 11: delta or fill
+        if (next_bit(ctx) == 0) {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u16_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 4, 1, color);
+        } else {
+            u16 color = read_palette_color(ctx);
+            fill_u16_block(ctx, ctx->block_offset, 4, 1, color);
+        }
+        ctx->block_offset += 2;
+        break;
     }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u16_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 4, 1, color);
-    } else {
-        u16 color = read_palette_color(ctx);
-        fill_u16_block(ctx, ctx->block_offset, 4, 1, color);
-    }
-    ctx->block_offset += 2;
 }
 
 static IWRAM_CODE void decode_block_2x2(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 2, 1);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 2, 1);
+        ctx->block_offset += 4;
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 2, 1);
         }
         ctx->block_offset += 4;
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) != 0) {
+        break;
+    case 2: // 10: subdivide
+        if (next_bit(ctx) == 0) {
+            decode_block_2x1(ctx);
+            ctx->block_offset += 0x1DC;
+            decode_block_2x1(ctx);
+            ctx->block_offset -= 0x1E0;
+        } else {
             decode_block_1x2(ctx);
             decode_block_1x2(ctx);
-            return;
         }
-        decode_block_2x1(ctx);
-        ctx->block_offset += 0x1DC;
-        decode_block_2x1(ctx);
-        ctx->block_offset -= 0x1E0;
-        return;
+        break;
+    case 3: // 11: delta or fill
+        if (next_bit(ctx) == 0) {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 2, 1, color);
+        } else {
+            u16 color = read_palette_color(ctx);
+            fill_u32_block(ctx, ctx->block_offset, 2, 1, color);
+        }
+        ctx->block_offset += 4;
+        break;
     }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 2, 1, color);
-    } else {
-        u16 color = read_palette_color(ctx);
-        fill_u32_block(ctx, ctx->block_offset, 2, 1, color);
-    }
-    ctx->block_offset += 4;
 }
 
 static IWRAM_CODE void decode_block_4x1(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 1, 2);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 1, 2);
+        ctx->block_offset += 8;
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 1, 2);
         }
         ctx->block_offset += 8;
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
+        break;
+    case 2: // 10: subdivide (only horizontal split for Nx1)
         decode_block_2x1(ctx);
         decode_block_2x1(ctx);
-        return;
+        break;
+    case 3: // 11: delta or fill
+        if (next_bit(ctx) == 0) {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 1, 2, color);
+        } else {
+            u16 color = read_palette_color(ctx);
+            fill_u32_block(ctx, ctx->block_offset, 1, 2, color);
+        }
+        ctx->block_offset += 8;
+        break;
     }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 1, 2, color);
-    } else {
-        u16 color = read_palette_color(ctx);
-        fill_u32_block(ctx, ctx->block_offset, 1, 2, color);
-    }
-    ctx->block_offset += 8;
 }
 
 static IWRAM_CODE void decode_block_1x2(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u16_block(ctx, ctx->block_offset, ctx->block_offset, 2, 1);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u16_block(ctx, ctx->block_offset, ctx->block_offset, 2, 1);
+        ctx->block_offset += 2;
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u16_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 2, 1);
         }
         ctx->block_offset += 2;
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u16_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 2, 1, color);
-    } else {
+        break;
+    case 2: // 10: delta
+        {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u16_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 2, 1, color);
+        }
+        ctx->block_offset += 2;
+        break;
+    case 3: // 11: fill (same or two colors)
         if (next_bit(ctx) == 0) {
             u16 color0 = read_palette_color(ctx);
             fill_u16_block(ctx, ctx->block_offset, 2, 1, color0);
@@ -649,30 +686,36 @@ static IWRAM_CODE void decode_block_1x2(DecodeContext *ctx) {
             ctx->dst[ctx->block_offset >> 1] = color0;
             ctx->dst[(ctx->block_offset + ROW_BYTES) >> 1] = color1;
         }
+        ctx->block_offset += 2;
+        break;
     }
-    ctx->block_offset += 2;
 }
 
 static IWRAM_CODE void decode_block_2x1(DecodeContext *ctx) {
-    if (next_bit(ctx) == 0) {
-        if (next_bit(ctx) == 0) {
-            copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 1, 1);
-        } else {
+    switch (next_2bits(ctx)) {
+    case 0: // 00: copy from same position
+        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 1, 1);
+        ctx->block_offset += 4;
+        break;
+    case 1: // 01: copy with codebook offset
+        {
             u8 code = read_code(ctx);
             copy_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 1, 1);
         }
         ctx->block_offset += 4;
-        return;
-    }
-
-    if (next_bit(ctx) == 0) {
-        u8 code = read_code(ctx);
-        s16 color = to_signed16(read_palette_color(ctx));
-        delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 1, 1, color);
-    } else {
+        break;
+    case 2: // 10: delta
+        {
+            u8 code = read_code(ctx);
+            s16 color = to_signed16(read_palette_color(ctx));
+            delta_u32_block(ctx, ctx->block_offset, ctx->block_offset + CODEBOOK_OFFSETS[code], 1, 1, color);
+        }
+        ctx->block_offset += 4;
+        break;
+    case 3: // 11: fill (same or two colors)
         if (next_bit(ctx) == 0) {
             u16 color0 = read_palette_color(ctx);
-            // Fill 1x1 (2 pixels width) with same color
+            // Fill 2 pixels width with same color
             ctx->dst[ctx->block_offset >> 1] = color0;
             ctx->dst[(ctx->block_offset >> 1) + 1] = color0;
         } else {
@@ -681,8 +724,9 @@ static IWRAM_CODE void decode_block_2x1(DecodeContext *ctx) {
             ctx->dst[ctx->block_offset >> 1] = color0;
             ctx->dst[(ctx->block_offset >> 1) + 1] = color1;
         }
+        ctx->block_offset += 4;
+        break;
     }
-    ctx->block_offset += 4;
 }
 
 // Also put the main decoder loop in IWRAM for good measure?
