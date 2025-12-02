@@ -20,6 +20,32 @@
 #include "gbs_audio.h"
 #include "gbm_decoder.h"
 
+// Fast frame copy using ARM ldmia/stmia
+// Unlike DMA, CPU memory access doesn't monopolize the bus and won't
+// starve audio FIFO DMA. Audio DMA has higher priority and can interleave.
+//
+// Copies 128 bytes per iteration (4x unrolled, 32 bytes each).
+// Total: 76800 bytes = 600 iterations.
+__attribute__((target("arm"), noinline))
+static void copy_frame_to_vram(const void* src, void* dst, u32 size) {
+    asm volatile(
+        "1:                         \n"
+        "   ldmia %[src]!, {r2-r9}  \n"
+        "   stmia %[dst]!, {r2-r9}  \n"
+        "   ldmia %[src]!, {r2-r9}  \n"
+        "   stmia %[dst]!, {r2-r9}  \n"
+        "   ldmia %[src]!, {r2-r9}  \n"
+        "   stmia %[dst]!, {r2-r9}  \n"
+        "   ldmia %[src]!, {r2-r9}  \n"
+        "   stmia %[dst]!, {r2-r9}  \n"
+        "   subs  %[size], %[size], #128 \n"
+        "   bgt   1b                \n"
+        : [src] "+r" (src), [dst] "+r" (dst), [size] "+r" (size)
+        :
+        : "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "memory", "cc"
+    );
+}
+
 // EWRAM buffer for video frame (240 * 160 = 38400 pixels)
 __attribute__((section(".ewram"))) u16 frame_buffer[38400];
 
@@ -99,8 +125,9 @@ static void decode_and_display_frame(void) {
     // Wait for VBlank
     VBlankIntrWait();
 
-    // Copy to VRAM using DMA
-    dmaCopy(frame_buffer, (void*)0x06000000, 240 * 160 * 2);
+    // Copy to VRAM using CPU (ldmia/stmia) instead of DMA
+    // CPU access allows audio DMA to interleave, preventing audio stutter
+    copy_frame_to_vram(frame_buffer, (void*)0x06000000, 240 * 160 * 2);
 
     video_offset = next_off;
 }
