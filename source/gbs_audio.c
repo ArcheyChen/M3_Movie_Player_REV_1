@@ -32,8 +32,25 @@
 #define SOUNDCNT_X_ENABLE   0x0080
 
 // Buffer configuration
-// Use 368 samples for ~60Hz buffer swap rate at 22050Hz
-#define AUDIO_BUFFER_SAMPLES    368
+// AUDIO_BUFFER_SAMPLES controls the buffer swap frequency and interrupt rate.
+//
+// Timer0 overflows at sample_rate, Timer1 cascades and counts Timer0 overflows.
+// When Timer1 counts AUDIO_BUFFER_SAMPLES overflows, it triggers IRQ to swap buffers.
+//
+// Swap frequency = sample_rate / AUDIO_BUFFER_SAMPLES
+// Examples at 22050Hz: 368->60Hz, 512->43Hz, 736->30Hz, 1024->21.5Hz, 1472->15Hz
+// Examples at 11025Hz: 368->30Hz, 512->21.5Hz, 736->15Hz, 1024->10.8Hz
+//
+// Larger buffer = fewer interrupts but higher latency and more memory usage.
+// Buffer memory = AUDIO_BUFFER_SAMPLES * 2 (double buffering) * channels bytes.
+// Source data per interrupt varies by mode:
+//   Mode 0 (stereo 4bit): 1 byte/sample -> 1024 bytes
+//   Mode 1 (mono 3bit):   3/8 byte/sample -> 384 bytes
+//   Mode 2 (mono 4bit):   0.5 byte/sample -> 512 bytes
+//   Mode 3/4 (mono 2bit): 0.25 byte/sample -> 256 bytes
+//
+// Value should be divisible by 8 for Mode 1 compatibility (8 samples per 3 bytes).
+#define AUDIO_BUFFER_SAMPLES    1024
 #define AUDIO_BUFFER_COUNT      2
 
 // ============================================================================
