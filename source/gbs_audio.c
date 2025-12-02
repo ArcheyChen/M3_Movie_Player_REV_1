@@ -144,7 +144,8 @@ static struct {
     ChannelState left;
     ChannelState right;     // Only used for stereo
 
-    // Block tracking
+    // Block tracking - current_block_ptr caches gbs_data + header + block_index * block_size
+    const uint8_t* current_block_ptr;
     uint32_t block_index;
     uint32_t byte_in_block;
     uint32_t block_header_size;
@@ -253,9 +254,8 @@ static IWRAM_CODE int16_t decode_adpcm_2bit(uint8_t code, ChannelState* ch) {
 // Block Management
 // ============================================================================
 
-static IWRAM_CODE const uint8_t* get_current_block(void) {
-    return state.gbs_data + GBS_HEADER_SIZE +
-           (state.block_index * state.info.block_size);
+static inline const uint8_t* get_current_block(void) {
+    return state.current_block_ptr;
 }
 
 static IWRAM_CODE void parse_block_header_mono(const uint8_t* block, ChannelState* ch) {
@@ -291,13 +291,14 @@ static IWRAM_CODE void parse_block_header_stereo(const uint8_t* block) {
 static IWRAM_CODE void advance_to_next_block(void) {
     state.block_index++;
     state.byte_in_block = 0;
+    state.current_block_ptr += state.info.block_size;  // Just add block_size instead of multiply
 
     if (state.block_index >= state.info.total_blocks) {
         state.info.is_finished = true;
         return;
     }
 
-    const uint8_t* block = get_current_block();
+    const uint8_t* block = state.current_block_ptr;
 
     if (state.info.channels == 2) {
         parse_block_header_stereo(block);
@@ -312,8 +313,10 @@ static IWRAM_CODE void advance_to_next_block(void) {
 
 // Mode 0: Stereo 4-bit IMA ADPCM
 static IWRAM_CODE void decode_buffer_stereo_4bit(int8_t* left, int8_t* right, uint32_t count) {
-    const uint8_t* block = get_current_block();
+    // Cache data pointer (past header) and state fields for faster access
+    const uint8_t* data = state.current_block_ptr + state.block_header_size;
     uint32_t data_per_block = state.info.block_size - state.block_header_size;
+    uint32_t byte_pos = state.byte_in_block;
     uint32_t decoded = 0;
 
     for (uint32_t i = 0; i < count; i++) {
@@ -324,35 +327,38 @@ static IWRAM_CODE void decode_buffer_stereo_4bit(int8_t* left, int8_t* right, ui
         }
 
         // Check if we need next block
-        if (state.byte_in_block >= data_per_block) {
+        if (byte_pos >= data_per_block) {
+            state.byte_in_block = byte_pos;  // Save before advancing
             advance_to_next_block();
             if (state.info.is_finished) {
                 left[i] = 0;
                 right[i] = 0;
                 continue;
             }
-            block = get_current_block();
+            data = state.current_block_ptr + state.block_header_size;
+            byte_pos = 0;
         }
 
-        uint8_t byte = block[state.block_header_size + state.byte_in_block];
-        state.byte_in_block++;
+        uint32_t byte = data[byte_pos++];
 
         // Low nibble = left, high nibble = right
         int16_t sample_l = decode_ima_4bit(byte & 0x0F, &state.left);
-        int16_t sample_r = decode_ima_4bit((byte >> 4) & 0x0F, &state.right);
+        int16_t sample_r = decode_ima_4bit(byte >> 4, &state.right);
 
         left[i] = (int8_t)(sample_l >> 8);
         right[i] = (int8_t)(sample_r >> 8);
 
         decoded++;
     }
+    state.byte_in_block = byte_pos;
     state.info.samples_decoded += decoded;
 }
 
 // Mode 1: Mono 3-bit ADPCM (8 samples per 3 bytes)
 static IWRAM_CODE void decode_buffer_mono_3bit(int8_t* dest, uint32_t count) {
-    const uint8_t* block = get_current_block();
+    const uint8_t* data = state.current_block_ptr + state.block_header_size;
     uint32_t data_per_block = state.info.block_size - state.block_header_size;
+    uint32_t byte_pos = state.byte_in_block;
     uint32_t decoded = 0;
 
     for (uint32_t i = 0; i < count; i++) {
@@ -369,20 +375,21 @@ static IWRAM_CODE void decode_buffer_mono_3bit(int8_t* dest, uint32_t count) {
             continue;
         }
 
-        // Check if we need next block
-        if (state.byte_in_block + 3 > data_per_block) {
+        // Check if we need next block (need 3 bytes)
+        if (byte_pos + 3 > data_per_block) {
+            state.byte_in_block = byte_pos;
             advance_to_next_block();
             if (state.info.is_finished) {
                 dest[i] = 0;
                 continue;
             }
-            block = get_current_block();
+            data = state.current_block_ptr + state.block_header_size;
+            byte_pos = 0;
         }
 
         // Read 3 bytes = 24 bits = 8 samples
-        const uint8_t* src = block + state.block_header_size + state.byte_in_block;
-        uint32_t packed = src[0] | (src[1] << 8) | (src[2] << 16);
-        state.byte_in_block += 3;
+        uint32_t packed = data[byte_pos] | (data[byte_pos + 1] << 8) | (data[byte_pos + 2] << 16);
+        byte_pos += 3;
 
         // Decode 8 samples (unrolled, shift by 3 each time)
         state.buffered_samples[0] = decode_adpcm_3bit(packed & 0x07, &state.left);
@@ -406,13 +413,15 @@ static IWRAM_CODE void decode_buffer_mono_3bit(int8_t* dest, uint32_t count) {
         state.samples_buffered = 7;
         decoded++;
     }
+    state.byte_in_block = byte_pos;
     state.info.samples_decoded += decoded;
 }
 
 // Mode 2: Mono 4-bit IMA ADPCM
 static IWRAM_CODE void decode_buffer_mono_4bit(int8_t* dest, uint32_t count) {
-    const uint8_t* block = get_current_block();
+    const uint8_t* data = state.current_block_ptr + state.block_header_size;
     uint32_t data_per_block = state.info.block_size - state.block_header_size;
+    uint32_t byte_pos = state.byte_in_block;
     uint32_t decoded = 0;
 
     for (uint32_t i = 0; i < count; i++) {
@@ -430,17 +439,18 @@ static IWRAM_CODE void decode_buffer_mono_4bit(int8_t* dest, uint32_t count) {
         }
 
         // Check if we need next block
-        if (state.byte_in_block >= data_per_block) {
+        if (byte_pos >= data_per_block) {
+            state.byte_in_block = byte_pos;
             advance_to_next_block();
             if (state.info.is_finished) {
                 dest[i] = 0;
                 continue;
             }
-            block = get_current_block();
+            data = state.current_block_ptr + state.block_header_size;
+            byte_pos = 0;
         }
 
-        uint8_t byte = block[state.block_header_size + state.byte_in_block];
-        state.byte_in_block++;
+        uint32_t byte = data[byte_pos++];
 
         // Low nibble first
         int16_t sample_lo = decode_ima_4bit(byte & 0x0F, &state.left);
@@ -448,16 +458,18 @@ static IWRAM_CODE void decode_buffer_mono_4bit(int8_t* dest, uint32_t count) {
         decoded++;
 
         // Buffer high nibble for next iteration
-        state.high_nibble_sample = decode_ima_4bit((byte >> 4) & 0x0F, &state.left);
+        state.high_nibble_sample = decode_ima_4bit(byte >> 4, &state.left);
         state.have_high_nibble = true;
     }
+    state.byte_in_block = byte_pos;
     state.info.samples_decoded += decoded;
 }
 
 // Mode 3/4: Mono 2-bit ADPCM (4 samples per byte)
 static IWRAM_CODE void decode_buffer_mono_2bit(int8_t* dest, uint32_t count) {
-    const uint8_t* block = get_current_block();
+    const uint8_t* data = state.current_block_ptr + state.block_header_size;
     uint32_t data_per_block = state.info.block_size - state.block_header_size;
+    uint32_t byte_pos = state.byte_in_block;
     uint32_t decoded = 0;
 
     for (uint32_t i = 0; i < count; i++) {
@@ -475,17 +487,18 @@ static IWRAM_CODE void decode_buffer_mono_2bit(int8_t* dest, uint32_t count) {
         }
 
         // Check if we need next block
-        if (state.byte_in_block >= data_per_block) {
+        if (byte_pos >= data_per_block) {
+            state.byte_in_block = byte_pos;
             advance_to_next_block();
             if (state.info.is_finished) {
                 dest[i] = 0;
                 continue;
             }
-            block = get_current_block();
+            data = state.current_block_ptr + state.block_header_size;
+            byte_pos = 0;
         }
 
-        uint32_t byte = block[state.block_header_size + state.byte_in_block];
-        state.byte_in_block++;
+        uint32_t byte = data[byte_pos++];
 
         // Decode 4 samples from byte (unrolled, shift instead of multiply)
         state.buffered_samples[0] = decode_adpcm_2bit(byte & 0x03, &state.left);
@@ -501,6 +514,7 @@ static IWRAM_CODE void decode_buffer_mono_2bit(int8_t* dest, uint32_t count) {
         state.samples_buffered = 3;
         decoded++;
     }
+    state.byte_in_block = byte_pos;
     state.info.samples_decoded += decoded;
 }
 
@@ -659,13 +673,15 @@ bool gbs_audio_init(const uint8_t* gbs_data, uint32_t gbs_size) {
 
     state.info.total_samples = state.info.total_blocks * samples_per_block;
 
+    // Initialize first block pointer
+    state.current_block_ptr = gbs_data + GBS_HEADER_SIZE;
+
     // Initialize first block
     if (state.info.total_blocks > 0) {
-        const uint8_t* first_block = gbs_data + GBS_HEADER_SIZE;
         if (state.info.channels == 2) {
-            parse_block_header_stereo(first_block);
+            parse_block_header_stereo(state.current_block_ptr);
         } else {
-            parse_block_header_mono(first_block, &state.left);
+            parse_block_header_mono(state.current_block_ptr, &state.left);
         }
     }
 
@@ -762,14 +778,14 @@ void gbs_audio_restart(void) {
     state.byte_in_block = 0;
     state.info.samples_decoded = 0;
     state.info.is_finished = false;
+    state.current_block_ptr = state.gbs_data + GBS_HEADER_SIZE;
 
     // Re-parse first block header
     if (state.info.total_blocks > 0) {
-        const uint8_t* first_block = state.gbs_data + GBS_HEADER_SIZE;
         if (state.info.channels == 2) {
-            parse_block_header_stereo(first_block);
+            parse_block_header_stereo(state.current_block_ptr);
         } else {
-            parse_block_header_mono(first_block, &state.left);
+            parse_block_header_mono(state.current_block_ptr, &state.left);
         }
     }
 

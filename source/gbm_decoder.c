@@ -124,10 +124,12 @@ static IWRAM_CODE void copy_u32_block(DecodeContext *ctx, int dst_off, int ref_o
     const u16 *s = ctx->ref + (ref_off >> 1);
 
     for (int r = 0; r < rows; r++) {
+        const u16 *sp = s;
         for (int i = 0; i < words; i++) {
             // Read two u16 from ref (VRAM), write as u32 to dst (EWRAM)
-            u32 val = s[i * 2] | ((u32)s[i * 2 + 1] << 16);
+            u32 val = sp[0] | ((u32)sp[1] << 16);
             d[i] = val;
+            sp += 2;
         }
         d = (u32*)((u16*)d + ROW_STRIDE);
         s += ROW_STRIDE;
@@ -152,11 +154,13 @@ static IWRAM_CODE void delta_u32_block(DecodeContext *ctx, int dst_off, int ref_
     // Pack delta into both halves, clear bit15/31 before add to prevent overflow propagation
     u32 delta32 = (u16)delta | ((u32)(u16)delta << 16);
     for (int r = 0; r < rows; r++) {
+        const u16 *sp = s;
         for (int i = 0; i < words; i++) {
             // Read two u16 from VRAM, combine to u32
-            u32 val = s[i * 2] | ((u32)s[i * 2 + 1] << 16);
+            u32 val = sp[0] | ((u32)sp[1] << 16);
             // Clear bit15 and bit31, add delta, overflow from low u16 goes to bit15 (harmless)
             d[i] = ((val & 0x7FFF7FFF) + delta32);
+            sp += 2;
         }
         d = (u32*)((u16*)d + ROW_STRIDE);
         s += ROW_STRIDE;
