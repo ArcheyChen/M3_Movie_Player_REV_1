@@ -68,9 +68,33 @@ static IWRAM_CODE int next_bit(DecodeContext *ctx) {
 
 // Read 2 bits at once - optimized for common decode patterns
 static IWRAM_CODE int next_2bits(DecodeContext *ctx) {
-    int bit0 = next_bit(ctx);
-    int bit1 = next_bit(ctx);
-    return (bit0 << 1) | bit1;
+    u32 state = ctx->state;
+
+    // Fast path: sentinel is in low 30 bits, we have at least 2 data bits
+    if (state & 0x3FFFFFFF) {
+        int bits = state >> 30;
+        ctx->state = state << 2;
+        return bits;
+    }
+
+    // Medium path: sentinel at bit 30, exactly 1 data bit at bit 31
+    // state is either 0x40000000 (bit0=0) or 0xC0000000 (bit0=1)
+    if (state & (1u << 30)) {
+        int bit0 = state >> 31;  // Read the 1 available data bit
+        // Refill and read second bit
+        u32 word = read_u32_unaligned(ctx->flag_ptr);
+        ctx->flag_ptr += 4;
+        int bit1 = word >> 31;
+        ctx->state = (word << 1) | 1;
+        return (bit0 << 1) | bit1;
+    }
+
+    // Slow path: sentinel at bit 31 (no data bits), refill and read 2 bits
+    u32 word = read_u32_unaligned(ctx->flag_ptr);
+    ctx->flag_ptr += 4;
+    int bits = word >> 30;
+    ctx->state = (word << 2) | 2;
+    return bits;
 }
 
 static inline u16 read_palette_color(DecodeContext *ctx) {
