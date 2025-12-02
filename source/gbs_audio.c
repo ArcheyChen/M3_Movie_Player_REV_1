@@ -380,18 +380,26 @@ static IWRAM_CODE void decode_buffer_mono_3bit(int8_t* dest, uint32_t count) {
         }
 
         // Read 3 bytes = 24 bits = 8 samples
-        uint8_t b0 = block[state.block_header_size + state.byte_in_block];
-        uint8_t b1 = block[state.block_header_size + state.byte_in_block + 1];
-        uint8_t b2 = block[state.block_header_size + state.byte_in_block + 2];
+        const uint8_t* src = block + state.block_header_size + state.byte_in_block;
+        uint32_t packed = src[0] | (src[1] << 8) | (src[2] << 16);
         state.byte_in_block += 3;
 
-        uint32_t packed = b0 | (b1 << 8) | (b2 << 16);
-
-        // Decode 8 samples
-        for (int j = 0; j < 8; j++) {
-            uint8_t code = (packed >> (j * 3)) & 0x07;
-            state.buffered_samples[j] = decode_adpcm_3bit(code, &state.left);
-        }
+        // Decode 8 samples (unrolled, shift by 3 each time)
+        state.buffered_samples[0] = decode_adpcm_3bit(packed & 0x07, &state.left);
+        packed >>= 3;
+        state.buffered_samples[1] = decode_adpcm_3bit(packed & 0x07, &state.left);
+        packed >>= 3;
+        state.buffered_samples[2] = decode_adpcm_3bit(packed & 0x07, &state.left);
+        packed >>= 3;
+        state.buffered_samples[3] = decode_adpcm_3bit(packed & 0x07, &state.left);
+        packed >>= 3;
+        state.buffered_samples[4] = decode_adpcm_3bit(packed & 0x07, &state.left);
+        packed >>= 3;
+        state.buffered_samples[5] = decode_adpcm_3bit(packed & 0x07, &state.left);
+        packed >>= 3;
+        state.buffered_samples[6] = decode_adpcm_3bit(packed & 0x07, &state.left);
+        packed >>= 3;
+        state.buffered_samples[7] = decode_adpcm_3bit(packed & 0x07, &state.left);
 
         // Output first sample, buffer the rest
         dest[i] = (int8_t)(state.buffered_samples[0] >> 8);
@@ -476,14 +484,17 @@ static IWRAM_CODE void decode_buffer_mono_2bit(int8_t* dest, uint32_t count) {
             block = get_current_block();
         }
 
-        uint8_t byte = block[state.block_header_size + state.byte_in_block];
+        uint32_t byte = block[state.block_header_size + state.byte_in_block];
         state.byte_in_block++;
 
-        // Decode 4 samples from byte (bits 0-1, 2-3, 4-5, 6-7)
-        for (int j = 0; j < 4; j++) {
-            uint8_t code = (byte >> (j * 2)) & 0x03;
-            state.buffered_samples[j] = decode_adpcm_2bit(code, &state.left);
-        }
+        // Decode 4 samples from byte (unrolled, shift instead of multiply)
+        state.buffered_samples[0] = decode_adpcm_2bit(byte & 0x03, &state.left);
+        byte >>= 2;
+        state.buffered_samples[1] = decode_adpcm_2bit(byte & 0x03, &state.left);
+        byte >>= 2;
+        state.buffered_samples[2] = decode_adpcm_2bit(byte & 0x03, &state.left);
+        byte >>= 2;
+        state.buffered_samples[3] = decode_adpcm_2bit(byte & 0x03, &state.left);
 
         // Output first sample, buffer the rest
         dest[i] = (int8_t)(state.buffered_samples[0] >> 8);
