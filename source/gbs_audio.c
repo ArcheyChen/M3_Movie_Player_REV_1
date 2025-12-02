@@ -362,6 +362,15 @@ static struct {
 
     // Playback state
     volatile uint8_t active_buffer;
+
+    // A/V sync: track minute boundaries using addition instead of division
+    // samples_per_minute = sample_rate * 60 (precomputed at init)
+    // next_minute_sample = threshold for next minute boundary
+    // current_audio_minute = which minute we're currently in (0-based)
+    uint32_t samples_per_minute;
+    uint32_t next_minute_sample;
+    uint32_t current_audio_minute;      // Current minute (0, 1, 2, ...)
+    volatile int32_t sync_minute;       // New minute to sync to, or -1 if none pending
 } state;
 
 // Double buffers for decoded PCM (8-bit signed)
@@ -769,6 +778,15 @@ static IWRAM_CODE void audio_timer1_handler(void) {
     decode_buffer(audio_buffer_left[play_buffer],
                   state.info.channels == 2 ? audio_buffer_right[play_buffer] : NULL,
                   AUDIO_BUFFER_SAMPLES);
+
+    // Check if we crossed a minute boundary (using comparison instead of division)
+    if (state.info.samples_decoded >= state.next_minute_sample) {
+        // Crossed into next minute
+        state.current_audio_minute++;
+        state.next_minute_sample += state.samples_per_minute;
+        // Signal sync to the new minute
+        state.sync_minute = (int32_t)state.current_audio_minute;
+    }
 }
 
 // ============================================================================
@@ -878,6 +896,13 @@ bool gbs_audio_init(const uint8_t* gbs_data, uint32_t gbs_size) {
     }
 
     state.info.is_finished = (state.info.total_blocks == 0);
+
+    // Initialize A/V sync tracking
+    // Precompute samples_per_minute to avoid runtime multiplication
+    state.samples_per_minute = state.info.sample_rate * 60;
+    state.next_minute_sample = state.samples_per_minute;  // First boundary at minute 1
+    state.current_audio_minute = 0;  // Start at minute 0
+    state.sync_minute = -1;  // No sync pending initially
 
     return true;
 }
@@ -1005,4 +1030,95 @@ void gbs_audio_shutdown(void) {
     gbs_audio_stop();
     memset(&state, 0, sizeof(state));
     state.info.mode = GBS_MODE_INVALID;
+}
+
+void gbs_audio_seek_minute(uint32_t minute) {
+    if (state.info.mode == GBS_MODE_INVALID) return;
+
+    gbs_audio_stop();
+
+    // Calculate target block based on minute
+    // samples_per_minute = sample_rate * 60
+    uint32_t samples_per_minute = state.info.sample_rate * 60;
+    uint32_t target_sample = minute * samples_per_minute;
+
+    // Clamp to valid range
+    if (target_sample >= state.info.total_samples) {
+        target_sample = 0;  // Wrap to beginning
+        minute = 0;
+    }
+
+    // Calculate samples per block
+    uint32_t data_per_block = state.info.block_size - state.block_header_size;
+    uint32_t samples_per_block;
+
+    switch (state.info.mode) {
+        case GBS_MODE_STEREO_4BIT:
+            samples_per_block = data_per_block;
+            break;
+        case GBS_MODE_MONO_3BIT:
+            samples_per_block = (data_per_block / 3) * 8;
+            break;
+        case GBS_MODE_MONO_4BIT:
+            samples_per_block = data_per_block * 2;
+            break;
+        case GBS_MODE_MONO_2BIT:
+        case GBS_MODE_MONO_2BIT_SM:
+            samples_per_block = data_per_block * 4;
+            break;
+        default:
+            samples_per_block = 1;
+    }
+
+    // Calculate target block index
+    uint32_t target_block = target_sample / samples_per_block;
+    if (target_block >= state.info.total_blocks) {
+        target_block = 0;
+    }
+
+    // Reset decoder state to target block
+    state.block_index = target_block;
+    state.byte_in_block = 0;
+    state.info.samples_decoded = target_block * samples_per_block;
+    state.info.is_finished = false;
+    state.samples_buffered = 0;
+    state.have_high_nibble = false;
+    state.current_block_ptr = state.gbs_data + GBS_HEADER_SIZE + target_block * state.info.block_size;
+
+    // Reset sync tracking for new position
+    // next_minute_sample = (minute + 1) * samples_per_minute
+    // Use addition loop to avoid multiplication
+    state.next_minute_sample = 0;
+    for (uint32_t i = 0; i <= minute; i++) {
+        state.next_minute_sample += state.samples_per_minute;
+    }
+    state.current_audio_minute = minute;
+    state.sync_minute = -1;  // Clear any pending sync
+
+    // Parse block header
+    if (state.info.channels == 2) {
+        parse_block_header_stereo(state.current_block_ptr);
+    } else {
+        parse_block_header_mono(state.current_block_ptr, &state.left);
+    }
+
+    gbs_audio_start();
+}
+
+uint32_t gbs_audio_get_current_minute(void) {
+    if (state.info.sample_rate == 0) return 0;
+    return state.info.samples_decoded / (state.info.sample_rate * 60);
+}
+
+uint32_t gbs_audio_get_total_minutes(void) {
+    if (state.info.sample_rate == 0) return 0;
+    return (state.info.total_samples + state.info.sample_rate * 60 - 1) / (state.info.sample_rate * 60);
+}
+
+int32_t gbs_audio_check_minute_sync(void) {
+    int32_t minute = state.sync_minute;
+    if (minute >= 0) {
+        state.sync_minute = -1;  // Clear pending flag
+    }
+    return minute;
 }

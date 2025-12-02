@@ -86,4 +86,29 @@ const GbsAudioInfo* gbs_audio_get_info(void);
  */
 void gbs_audio_shutdown(void);
 
+/*
+ * Seek to a specific minute in the audio.
+ * Audio will stop, seek, and restart.
+ *
+ * @param minute  Target minute (0-based)
+ */
+void gbs_audio_seek_minute(uint32_t minute);
+
+/*
+ * Get current playback position in minutes.
+ */
+uint32_t gbs_audio_get_current_minute(void);
+
+/*
+ * Get total duration in minutes.
+ */
+uint32_t gbs_audio_get_total_minutes(void);
+
+/*
+ * Check if audio crossed a minute boundary since last check.
+ * Returns the new minute number if crossed, or -1 if not.
+ * Calling this clears the pending flag.
+ */
+int32_t gbs_audio_check_minute_sync(void);
+
 #endif // GBS_AUDIO_H

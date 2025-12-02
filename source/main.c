@@ -4,7 +4,11 @@
  * Combined video (GBM) and audio (GBS) player.
  * Loads media files from GBFS filesystem.
  *
- * Note: Currently no A/V sync - just plays both independently.
+ * Features:
+ * - 10 FPS video with frame rate control
+ * - A/V sync every 600 frames (1 minute) at I-frames
+ * - L/R buttons for seeking by minute
+ * - START button to restart from beginning
  */
 
 #include <gba.h>
@@ -60,10 +64,16 @@ static uint32_t video_size = 0;
 // Video is 10 FPS, VBlank is 60 Hz, so 1 frame = 6 VBlanks
 #define VBLANKS_PER_FRAME 6
 
+// I-frame interval: 600 frames = 1 minute at 10 FPS
+#define FRAMES_PER_MINUTE 600
+
 // target_frame: incremented by VBlank ISR, represents "should have displayed this many frames"
 // current_frame: maintained by main loop, represents "have decoded this many frames"
 static volatile u32 target_frame = 0;
 static u32 current_frame = 0;
+
+// For tracking current minute (for sync and seeking)
+static u32 current_minute = 0;
 
 static void vblank_handler(void) {
     // Called at 60 Hz, increment target_frame every 6 VBlanks (10 FPS)
@@ -78,7 +88,7 @@ static void vblank_handler(void) {
 static void show_error(const char* msg) {
     consoleDemoInit();
     iprintf("\x1b[2J");
-    iprintf("GBA Media Player\n");
+    iprintf("Ausar's M3 Media Player\n");
     iprintf("================\n\n");
     iprintf("Error: %s\n", msg);
     while (1) VBlankIntrWait();
@@ -86,7 +96,7 @@ static void show_error(const char* msg) {
 
 static void show_info(void) {
     iprintf("\x1b[2J");
-    iprintf("GBA Media Player\n");
+    iprintf("Ausar's M3 Media Player\n");
     iprintf("================\n\n");
 
     if (has_video) {
@@ -120,6 +130,72 @@ static void init_video_display(void) {
     }
 }
 
+// Pre-calculated I-frame offsets (one per minute)
+// Maximum 256 minutes (~4 hours) should be enough
+#define MAX_MINUTES 256
+static u32 iframe_offsets[MAX_MINUTES];
+static u32 total_minutes = 0;
+
+// Scan video to find I-frame offsets (every 600 frames)
+static void scan_iframe_offsets(void) {
+    if (!has_video || !video_data) return;
+
+    u32 offset = GBM_HEADER_SIZE;
+    u32 frame_count = 0;
+    u32 minute = 0;
+
+    while (offset + 2 < video_size && minute < MAX_MINUTES) {
+        // Record offset at start of each minute (every 600 frames)
+        if (frame_count % FRAMES_PER_MINUTE == 0) {
+            iframe_offsets[minute] = offset;
+            minute++;
+        }
+
+        // Read frame length and skip to next frame
+        uint16_t frame_len = video_data[offset] | (video_data[offset + 1] << 8);
+        if (frame_len == 0 || frame_len == 0xFFFF) break;
+
+        offset = offset + 2 + frame_len;
+        frame_count++;
+    }
+
+    total_minutes = minute;
+}
+
+// Seek video to a specific minute (jumps to I-frame)
+// I-frame will fully redraw the screen, no need to clear VRAM
+static void video_seek_minute(u32 minute) {
+    if (!has_video || minute >= total_minutes) return;
+
+    video_offset = iframe_offsets[minute];
+    current_minute = minute;
+
+    // Reset frame counters to match the new position
+    // Use addition loop instead of multiplication
+    current_frame = 0;
+    for (u32 i = 0; i < minute; i++) {
+        current_frame += FRAMES_PER_MINUTE;
+    }
+    target_frame = current_frame;
+}
+
+// Seek both audio and video to a specific minute
+static void seek_to_minute(u32 minute) {
+    if (minute >= total_minutes && total_minutes > 0) {
+        minute = total_minutes - 1;
+    }
+
+    if (has_video) {
+        video_seek_minute(minute);
+    }
+
+    if (has_audio) {
+        gbs_audio_seek_minute(minute);
+    }
+
+    current_minute = minute;
+}
+
 // Decode next frame into frame_buffer (does not display)
 static void decode_next_frame(void) {
     if (!has_video || !video_data) return;
@@ -128,6 +204,9 @@ static void decode_next_frame(void) {
     if (video_offset + 2 >= video_size) {
         // Loop video
         video_offset = GBM_HEADER_SIZE;
+        current_frame = 0;
+        target_frame = 0;
+        current_minute = 0;
     }
 
     // Read frame length
@@ -136,11 +215,25 @@ static void decode_next_frame(void) {
     // Check for invalid frame
     if (frame_len == 0 || frame_len == 0xFFFF) {
         video_offset = GBM_HEADER_SIZE;
+        current_frame = 0;
+        target_frame = 0;
+        current_minute = 0;
         frame_len = video_data[video_offset] | (video_data[video_offset + 1] << 8);
     }
 
     // Decode frame (dst = EWRAM buffer, ref = VRAM for delta)
     video_offset = gbm_decode_frame(video_data, video_offset, frame_buffer, (const u16*)0x06000000);
+}
+
+// Check if audio triggered a sync point (called from main loop)
+static void check_audio_sync(void) {
+    if (!has_audio) return;
+
+    int32_t sync_minute = gbs_audio_check_minute_sync();
+    if (sync_minute >= 0 && (u32)sync_minute < total_minutes) {
+        // Audio reached a new minute, force video to sync
+        video_seek_minute((u32)sync_minute);
+    }
 }
 
 // Process video frames with frame rate control
@@ -157,6 +250,14 @@ static void process_video(void) {
     // Display the pre-decoded frame
     copy_frame_to_vram(frame_buffer, (void*)0x06000000, 240 * 160 * 2);
     current_frame++;
+
+    // Update current minute (using subtraction loop instead of division)
+    u32 frame = current_frame;
+    current_minute = 0;
+    while (frame >= FRAMES_PER_MINUTE) {
+        frame -= FRAMES_PER_MINUTE;
+        current_minute++;
+    }
 }
 
 int main(void) {
@@ -208,6 +309,7 @@ int main(void) {
     // Start playback
     if (has_video) {
         init_video_display();
+        scan_iframe_offsets();  // Build I-frame offset table for seeking
     }
 
     if (has_audio) {
@@ -217,9 +319,15 @@ int main(void) {
     // Reset frame counters
     target_frame = 0;
     current_frame = 0;
+    current_minute = 0;
 
     // Main loop
     while (1) {
+        // Check for audio-driven sync (audio reached a minute boundary)
+        if (has_video) {
+            check_audio_sync();
+        }
+
         if (has_video) {
             process_video();
         } else {
@@ -230,18 +338,34 @@ int main(void) {
         // Handle audio looping
         if (has_audio && gbs_audio_is_finished()) {
             gbs_audio_restart();
+            if (has_video) {
+                seek_to_minute(0);  // Sync video when audio loops
+            }
         }
 
-        // Check for restart (START button)
+        // Handle input
         scanKeys();
-        if (keysDown() & KEY_START) {
-            if (has_video) {
-                video_offset = GBM_HEADER_SIZE;
-                target_frame = 0;
-                current_frame = 0;
+        u16 keys = keysDown();
+
+        // START: restart from beginning
+        if (keys & KEY_START) {
+            seek_to_minute(0);
+        }
+
+        // R: skip forward 1 minute
+        if (keys & KEY_R) {
+            u32 next_minute = current_minute + 1;
+            if (next_minute < total_minutes) {
+                seek_to_minute(next_minute);
             }
-            if (has_audio) {
-                gbs_audio_restart();
+        }
+
+        // L: skip backward 1 minute
+        if (keys & KEY_L) {
+            if (current_minute > 0) {
+                seek_to_minute(current_minute - 1);
+            } else {
+                seek_to_minute(0);  // Go to start
             }
         }
     }
