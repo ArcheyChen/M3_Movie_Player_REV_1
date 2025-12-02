@@ -1002,16 +1002,39 @@ void gbs_audio_pause(void) {
 void gbs_audio_resume(void) {
     if (!state.info.is_playing || !state.is_paused) return;
 
-    // Resume timers without resetting their counters
-    // Just re-enable the control bits, preserving current count values
     uint16_t timer_reload = 65536 - (GBA_MASTER_CLOCK / state.info.sample_rate);
 
-    // Timer0: sample rate timer
+    // Reset FIFOs to clear any stale data
+    if (state.info.channels == 2) {
+        REG_SOUNDCNT_H = DSOUNDCTRL_DMG100 |
+                         DSOUNDCTRL_A100 | DSOUNDCTRL_AL | DSOUNDCTRL_ATIMER(0) | DSOUNDCTRL_ARESET |
+                         DSOUNDCTRL_B100 | DSOUNDCTRL_BR | DSOUNDCTRL_BTIMER(0) | DSOUNDCTRL_BRESET;
+    } else {
+        REG_SOUNDCNT_H = DSOUNDCTRL_DMG100 |
+                         DSOUNDCTRL_A100 | DSOUNDCTRL_AR | DSOUNDCTRL_AL |
+                         DSOUNDCTRL_ATIMER(0) | DSOUNDCTRL_ARESET;
+    }
+
+    // Restart DMA from current buffer position
+    REG_DMA1CNT = 0;
+    REG_DMA1SAD = (uint32_t)audio_buffer_left[state.active_buffer];
+    REG_DMA1DAD = (uint32_t)&REG_FIFO_A;
+    REG_DMA1CNT = DMA_DST_FIXED | DMA_SRC_INC | DMA_REPEAT | DMA32 | DMA_SPECIAL | DMA_ENABLE;
+
+    if (state.info.channels == 2) {
+        REG_DMA2CNT = 0;
+        REG_DMA2SAD = (uint32_t)audio_buffer_right[state.active_buffer];
+        REG_DMA2DAD = (uint32_t)&REG_FIFO_B;
+        REG_DMA2CNT = DMA_DST_FIXED | DMA_SRC_INC | DMA_REPEAT | DMA32 | DMA_SPECIAL | DMA_ENABLE;
+    }
+
+    // Restart timers
+    REG_TM0CNT_H = 0;
     REG_TM0CNT_L = timer_reload;
     REG_TM0CNT_H = TIMER_START;
 
-    // Timer1: cascade counter - resume with current count
-    // Don't write to TM1CNT_L to preserve count position
+    REG_TM1CNT_H = 0;
+    REG_TM1CNT_L = 65536 - AUDIO_BUFFER_SAMPLES;
     REG_TM1CNT_H = TIMER_IRQ | TIMER_CASCADE | TIMER_START;
 
     state.is_paused = false;
