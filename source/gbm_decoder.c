@@ -218,7 +218,7 @@ static IWRAM_CODE void decode_block_2x1(DecodeContext *ctx);
 static IWRAM_CODE void decode_block_8x8(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 8, 4);
+        // copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 8, 4); // no-op: VRAM==BUF
         break;
     case 1: // 01: copy with codebook offset
         {
@@ -251,7 +251,7 @@ static IWRAM_CODE void decode_block_8x8(DecodeContext *ctx) {
 static IWRAM_CODE void decode_block_8x4(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 4, 4);
+        // copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 4, 4); // no-op: VRAM==BUF
         ctx->block_offset += 0x780;
         break;
     case 1: // 01: copy with codebook offset
@@ -288,7 +288,7 @@ static IWRAM_CODE void decode_block_8x4(DecodeContext *ctx) {
 static IWRAM_CODE void decode_block_4x8(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 8, 2);
+        // copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 8, 2); // no-op: VRAM==BUF
         ctx->block_offset += 8;
         break;
     case 1: // 01: copy with codebook offset
@@ -326,7 +326,7 @@ static IWRAM_CODE void decode_block_4x8(DecodeContext *ctx) {
 static IWRAM_CODE void decode_block_2x8(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 8, 1);
+        // copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 8, 1); // no-op: VRAM==BUF
         ctx->block_offset += 4;
         break;
     case 1: // 01: copy with codebook offset
@@ -364,7 +364,7 @@ static IWRAM_CODE void decode_block_2x8(DecodeContext *ctx) {
 static IWRAM_CODE void decode_block_1x8(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u16_block(ctx, ctx->block_offset, ctx->block_offset, 8, 1);
+        // copy_u16_block(ctx, ctx->block_offset, ctx->block_offset, 8, 1); // no-op: VRAM==BUF
         ctx->block_offset += 2;
         break;
     case 1: // 01: copy with codebook offset
@@ -397,7 +397,7 @@ static IWRAM_CODE void decode_block_1x8(DecodeContext *ctx) {
 static IWRAM_CODE void decode_block_4x4(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 4, 2);
+        // copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 4, 2); // no-op: VRAM==BUF
         ctx->block_offset += 8;
         break;
     case 1: // 01: copy with codebook offset
@@ -435,7 +435,7 @@ static IWRAM_CODE void decode_block_4x4(DecodeContext *ctx) {
 static IWRAM_CODE void decode_block_8x2(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 2, 4);
+        // copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 2, 4); // no-op: VRAM==BUF
         ctx->block_offset += 0x3C0;
         break;
     case 1: // 01: copy with codebook offset
@@ -472,7 +472,7 @@ static IWRAM_CODE void decode_block_8x2(DecodeContext *ctx) {
 static IWRAM_CODE void decode_block_2x4(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 4, 1);
+        // copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 4, 1); // no-op: VRAM==BUF
         ctx->block_offset += 4;
         break;
     case 1: // 01: copy with codebook offset
@@ -510,7 +510,7 @@ static IWRAM_CODE void decode_block_2x4(DecodeContext *ctx) {
 static IWRAM_CODE void decode_block_4x2(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 2, 2);
+        // copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 2, 2); // no-op: VRAM==BUF
         ctx->block_offset += 8;
         break;
     case 1: // 01: copy with codebook offset
@@ -548,7 +548,7 @@ static IWRAM_CODE void decode_block_4x2(DecodeContext *ctx) {
 static IWRAM_CODE void decode_block_8x1(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 1, 4);
+        // copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 1, 4); // no-op: VRAM==BUF
         ctx->block_offset += 0x1E0;
         break;
     case 1: // 01: copy with codebook offset
@@ -580,7 +580,7 @@ static IWRAM_CODE void decode_block_8x1(DecodeContext *ctx) {
 static IWRAM_CODE void decode_block_1x4(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u16_block(ctx, ctx->block_offset, ctx->block_offset, 4, 1);
+        // copy_u16_block(ctx, ctx->block_offset, ctx->block_offset, 4, 1); // no-op: VRAM==BUF
         ctx->block_offset += 2;
         break;
     case 1: // 01: copy with codebook offset
@@ -613,7 +613,7 @@ static IWRAM_CODE void decode_block_1x4(DecodeContext *ctx) {
 static IWRAM_CODE void decode_block_2x2(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 2, 1);
+        // copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 2, 1); // no-op: VRAM==BUF
         ctx->block_offset += 4;
         break;
     case 1: // 01: copy with codebook offset
@@ -651,7 +651,7 @@ static IWRAM_CODE void decode_block_2x2(DecodeContext *ctx) {
 static IWRAM_CODE void decode_block_4x1(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 1, 2);
+        // copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 1, 2); // no-op: VRAM==BUF
         ctx->block_offset += 8;
         break;
     case 1: // 01: copy with codebook offset
@@ -682,7 +682,7 @@ static IWRAM_CODE void decode_block_4x1(DecodeContext *ctx) {
 static IWRAM_CODE void decode_block_1x2(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u16_block(ctx, ctx->block_offset, ctx->block_offset, 2, 1);
+        // copy_u16_block(ctx, ctx->block_offset, ctx->block_offset, 2, 1); // no-op: VRAM==BUF
         ctx->block_offset += 2;
         break;
     case 1: // 01: copy with codebook offset
@@ -718,7 +718,7 @@ static IWRAM_CODE void decode_block_1x2(DecodeContext *ctx) {
 static IWRAM_CODE void decode_block_2x1(DecodeContext *ctx) {
     switch (next_2bits(ctx)) {
     case 0: // 00: copy from same position
-        copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 1, 1);
+        // copy_u32_block(ctx, ctx->block_offset, ctx->block_offset, 1, 1); // no-op: VRAM==BUF
         ctx->block_offset += 4;
         break;
     case 1: // 01: copy with codebook offset
