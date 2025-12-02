@@ -70,7 +70,7 @@ static IWRAM_CODE int next_bit(DecodeContext *ctx) {
     u32 word = read_u32_unaligned(ctx->flag_ptr);
     ctx->flag_ptr += 4;
 
-    int bit = (word >> 31) & 1;
+    int bit = (word >> 31);
     ctx->state = (word << 1);
     if (prev_sign) {
         ctx->state++;
@@ -129,11 +129,15 @@ static IWRAM_CODE void fill_u32_block(DecodeContext *ctx, int dst_off, int rows,
 static IWRAM_CODE void delta_u32_block(DecodeContext *ctx, int dst_off, int ref_off, int rows, int words, s16 delta) {
     u32 *d = (u32*)(ctx->dst + (dst_off >> 1));
     const u16 *s = ctx->ref + (ref_off >> 1);
+    // RGB555: bit15 is unused, can absorb carry from lower pixel
+    // Pack delta into both halves, clear bit15/31 before add to prevent overflow propagation
+    u32 delta32 = (u16)delta | ((u32)(u16)delta << 16);
     for (int r = 0; r < rows; r++) {
         for (int i = 0; i < words; i++) {
-            u16 v0 = s[i * 2] + delta;
-            u16 v1 = s[i * 2 + 1] + delta;
-            d[i] = v0 | ((u32)v1 << 16);
+            // Read two u16 from VRAM, combine to u32
+            u32 val = s[i * 2] | ((u32)s[i * 2 + 1] << 16);
+            // Clear bit15 and bit31, add delta, overflow from low u16 goes to bit15 (harmless)
+            d[i] = ((val & 0x7FFF7FFF) + delta32);
         }
         d = (u32*)((u16*)d + ROW_STRIDE);
         s += ROW_STRIDE;
@@ -702,9 +706,10 @@ u32 IWRAM_CODE gbm_decode_frame(const u8 *data, u32 offset, u16 *dst, const u16 
 
     u32 next_offset = offset + 2 + frame_len;
 
-    u8 b2 = bit_enc & 0xFF;
-    u8 b3 = (bit_enc >> 8) & 0xFF;
-    u16 flag_bytes = (b2 ^ 0x69) | ((b3 ^ 0xD6) << 8);
+    // u8 b2 = bit_enc & 0xFF;
+    // u8 b3 = (bit_enc >> 8) & 0xFF;
+    // u16 flag_bytes = (b2 ^ 0x69) | ((b3 ^ 0xD6) << 8);
+    u16 flag_bytes = bit_enc ^ 0xD669;
 
     DecodeContext ctx;
     ctx.state = 0x80000000; // Initial state

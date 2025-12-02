@@ -146,7 +146,7 @@ int main(void) {
     show_info();
 
     // Wait a moment to show info
-    for (int i = 0; i < 120; i++) {
+    for (int i = 0; i < 30; i++) {
         VBlankIntrWait();
     }
 
