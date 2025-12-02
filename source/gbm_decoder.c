@@ -54,27 +54,15 @@ static inline u16 read_u16_unaligned(const u8 *ptr) {
 // Critical Path: next_bit
 // Placing in IWRAM
 static IWRAM_CODE int next_bit(DecodeContext *ctx) {
-    int prev_sign = 0;
-
-    if (ctx->state != 0) {
-        int bit = (ctx->state >> 31) & 1;
-        ctx->state = (ctx->state << 1); 
-        if (ctx->state != 0) {
-            return bit;
-        }
-        prev_sign = bit;
-    } else {
-        prev_sign = 0;
+    if(ctx->state == (1<<31)){
+        u32 word = read_u32_unaligned(ctx->flag_ptr);
+        ctx->flag_ptr += 4;
+        int bit = (word >> 31);
+        ctx->state = (word << 1) | 1;
+        return bit;
     }
-
-    u32 word = read_u32_unaligned(ctx->flag_ptr);
-    ctx->flag_ptr += 4;
-
-    int bit = (word >> 31);
-    ctx->state = (word << 1);
-    if (prev_sign) {
-        ctx->state++;
-    }
+    int bit = ctx->state >> 31;
+    ctx->state = (ctx->state << 1);
     return bit;
 }
 
