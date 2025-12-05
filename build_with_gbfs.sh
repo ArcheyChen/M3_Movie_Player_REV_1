@@ -9,7 +9,7 @@
 
 set -e
 
-GBFS_TOOLS="../gbfs/tools"
+GBFS_TOOLS="./tools"
 GBFS_CMD="$GBFS_TOOLS/gbfs"
 PADBIN_CMD="$GBFS_TOOLS/padbin"
 
@@ -95,12 +95,13 @@ if [ -n "$GBS_FILE" ]; then
 fi
 
 # Output filename
-OUTPUT_ROM="gba_media_player.gba"
+INPUT_ROM="M3_Movie_Player.gba"
+OUTPUT_ROM="M3_Movie_Player_output.gba"
 
 # Copy ROM to output file (preserve original)
 echo ""
 echo "Copying ROM to $OUTPUT_ROM..."
-cp gba_audio_decoder.gba "$OUTPUT_ROM"
+cp "$INPUT_ROM" "$OUTPUT_ROM"
 
 # Pad output ROM to 256-byte boundary (required for GBFS search)
 echo "Padding ROM..."

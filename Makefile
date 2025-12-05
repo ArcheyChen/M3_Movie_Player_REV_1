@@ -20,7 +20,7 @@ include $(DEVKITARM)/gba_rules
 # the makefile is found
 #
 #---------------------------------------------------------------------------------
-TARGET		:= $(notdir $(CURDIR))
+TARGET		:= M3_Movie_Player
 BUILD		:= build
 SOURCES		:= source gbfs
 INCLUDES	:= include
