@@ -769,7 +769,7 @@ u32 IWRAM_CODE gbm_decode_frame(const u8 *data, u32 offset, u16 *dst, const u16 
     // u8 b2 = bit_enc & 0xFF;
     // u8 b3 = (bit_enc >> 8) & 0xFF;
     // u16 flag_bytes = (b2 ^ 0x69) | ((b3 ^ 0xD6) << 8);
-    u16 flag_bytes = bit_enc ^ 0xD6AC;
+    u16 flag_bytes = bit_enc ^ 0xD669;
 
     DecodeContext ctx;
     ctx.state = 0x80000000; // Initial state

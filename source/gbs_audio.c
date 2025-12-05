@@ -376,8 +376,8 @@ static struct {
 
 // Double buffers for decoded PCM (8-bit signed)
 // For stereo: left channel in buffer_left, right in buffer_right
-EWRAM_DATA static int8_t audio_buffer_left[AUDIO_BUFFER_COUNT][AUDIO_BUFFER_SAMPLES] __attribute__((aligned(4)));
-EWRAM_DATA static int8_t audio_buffer_right[AUDIO_BUFFER_COUNT][AUDIO_BUFFER_SAMPLES] __attribute__((aligned(4)));
+IWRAM_DATA static int8_t audio_buffer_left[AUDIO_BUFFER_COUNT][AUDIO_BUFFER_SAMPLES] __attribute__((aligned(4)));
+IWRAM_DATA static int8_t audio_buffer_right[AUDIO_BUFFER_COUNT][AUDIO_BUFFER_SAMPLES] __attribute__((aligned(4)));
 
 // ============================================================================
 // ADPCM Decoding Functions
@@ -847,7 +847,7 @@ bool gbs_audio_init(const uint8_t* gbs_data, uint32_t gbs_size) {
             state.block_header_size = 4;
             break;
         case GBS_MODE_MONO_2BIT_SM:
-            state.info.sample_rate = 22050;
+            state.info.sample_rate = 11025;
             state.info.channels = 1;
             state.info.block_size = 0x100;
             state.block_header_size = 4;
