@@ -9,7 +9,7 @@
 
 set -e
 
-GBFS_TOOLS="./tools"
+GBFS_TOOLS="./tools/gbfs/tools"
 GBFS_CMD="$GBFS_TOOLS/gbfs"
 PADBIN_CMD="$GBFS_TOOLS/padbin"
 
