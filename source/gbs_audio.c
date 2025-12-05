@@ -520,43 +520,38 @@ static IWRAM_CODE void advance_to_next_block(void) {
 
 // Mode 0: Stereo 4-bit IMA ADPCM
 static IWRAM_CODE void decode_buffer_stereo_4bit(int8_t* left, int8_t* right, uint32_t count) {
-    // Cache data pointer (past header) and state fields for faster access
     const uint8_t* data = state.current_block_ptr + state.block_header_size;
     uint32_t data_per_block = state.info.block_size - state.block_header_size;
     uint32_t byte_pos = state.byte_in_block;
     uint32_t decoded = 0;
 
-    for (uint32_t i = 0; i < count; i++) {
-        if (state.info.is_finished) {
-            left[i] = 0;
-            right[i] = 0;
-            continue;
+    while (!state.info.is_finished && decoded < count) {
+        uint32_t remaining_in_block = data_per_block - byte_pos;
+        uint32_t remaining_to_decode = count - decoded;
+        uint32_t to_decode = remaining_in_block < remaining_to_decode ? remaining_in_block : remaining_to_decode;
+
+        for (uint32_t j = 0; j < to_decode; j++) {
+            uint32_t byte = data[byte_pos++];
+            left[decoded] = (int8_t)(decode_ima_4bit(byte & 0x0F, &state.left) >> 8);
+            right[decoded] = (int8_t)(decode_ima_4bit(byte >> 4, &state.right) >> 8);
+            decoded++;
         }
 
-        // Check if we need next block
         if (byte_pos >= data_per_block) {
-            state.byte_in_block = byte_pos;  // Save before advancing
+            state.byte_in_block = byte_pos;
             advance_to_next_block();
-            if (state.info.is_finished) {
-                left[i] = 0;
-                right[i] = 0;
-                continue;
-            }
             data = state.current_block_ptr + state.block_header_size;
             byte_pos = 0;
         }
+    }
 
-        uint32_t byte = data[byte_pos++];
-
-        // Low nibble = left, high nibble = right
-        int16_t sample_l = decode_ima_4bit(byte & 0x0F, &state.left);
-        int16_t sample_r = decode_ima_4bit(byte >> 4, &state.right);
-
-        left[i] = (int8_t)(sample_l >> 8);
-        right[i] = (int8_t)(sample_r >> 8);
-
+    // Fill remaining with silence if finished early
+    while (decoded < count) {
+        left[decoded] = 0;
+        right[decoded] = 0;
         decoded++;
     }
+
     state.byte_in_block = byte_pos;
     state.info.samples_decoded += decoded;
 }
@@ -568,58 +563,83 @@ static IWRAM_CODE void decode_buffer_mono_3bit(int8_t* dest, uint32_t count) {
     uint32_t byte_pos = state.byte_in_block;
     uint32_t decoded = 0;
 
-    for (uint32_t i = 0; i < count; i++) {
-        if (state.info.is_finished) {
-            dest[i] = 0;
-            continue;
-        }
+    // First, drain any buffered samples from previous call
+    while (state.samples_buffered > 0 && decoded < count) {
+        dest[decoded++] = (int8_t)(state.buffered_samples[8 - state.samples_buffered] >> 8);
+        state.samples_buffered--;
+    }
 
-        // If we have buffered samples from previous group, use them
-        if (state.samples_buffered > 0) {
-            dest[i] = (int8_t)(state.buffered_samples[8 - state.samples_buffered] >> 8);
-            state.samples_buffered--;
-            decoded++;
-            continue;
-        }
-
-        // Check if we need next block (need 3 bytes)
+    // Main decode loop: process 8 samples at a time
+    while (!state.info.is_finished && decoded + 8 <= count) {
         if (byte_pos + 3 > data_per_block) {
             state.byte_in_block = byte_pos;
             advance_to_next_block();
-            if (state.info.is_finished) {
-                dest[i] = 0;
-                continue;
-            }
+            if (state.info.is_finished) break;
             data = state.current_block_ptr + state.block_header_size;
             byte_pos = 0;
         }
 
-        // Read 3 bytes = 24 bits = 8 samples
         uint32_t packed = data[byte_pos] | (data[byte_pos + 1] << 8) | (data[byte_pos + 2] << 16);
         byte_pos += 3;
 
-        // Decode 8 samples (unrolled, shift by 3 each time)
-        state.buffered_samples[0] = decode_adpcm_3bit(packed & 0x07, &state.left);
+        // Decode and output 8 samples directly
+        dest[decoded++] = (int8_t)(decode_adpcm_3bit(packed & 0x07, &state.left) >> 8);
         packed >>= 3;
-        state.buffered_samples[1] = decode_adpcm_3bit(packed & 0x07, &state.left);
+        dest[decoded++] = (int8_t)(decode_adpcm_3bit(packed & 0x07, &state.left) >> 8);
         packed >>= 3;
-        state.buffered_samples[2] = decode_adpcm_3bit(packed & 0x07, &state.left);
+        dest[decoded++] = (int8_t)(decode_adpcm_3bit(packed & 0x07, &state.left) >> 8);
         packed >>= 3;
-        state.buffered_samples[3] = decode_adpcm_3bit(packed & 0x07, &state.left);
+        dest[decoded++] = (int8_t)(decode_adpcm_3bit(packed & 0x07, &state.left) >> 8);
         packed >>= 3;
-        state.buffered_samples[4] = decode_adpcm_3bit(packed & 0x07, &state.left);
+        dest[decoded++] = (int8_t)(decode_adpcm_3bit(packed & 0x07, &state.left) >> 8);
         packed >>= 3;
-        state.buffered_samples[5] = decode_adpcm_3bit(packed & 0x07, &state.left);
+        dest[decoded++] = (int8_t)(decode_adpcm_3bit(packed & 0x07, &state.left) >> 8);
         packed >>= 3;
-        state.buffered_samples[6] = decode_adpcm_3bit(packed & 0x07, &state.left);
+        dest[decoded++] = (int8_t)(decode_adpcm_3bit(packed & 0x07, &state.left) >> 8);
         packed >>= 3;
-        state.buffered_samples[7] = decode_adpcm_3bit(packed & 0x07, &state.left);
-
-        // Output first sample, buffer the rest
-        dest[i] = (int8_t)(state.buffered_samples[0] >> 8);
-        state.samples_buffered = 7;
-        decoded++;
+        dest[decoded++] = (int8_t)(decode_adpcm_3bit(packed & 0x07, &state.left) >> 8);
     }
+
+    // Handle remaining samples (less than 8 needed)
+    if (!state.info.is_finished && decoded < count) {
+        if (byte_pos + 3 > data_per_block) {
+            state.byte_in_block = byte_pos;
+            advance_to_next_block();
+            if (!state.info.is_finished) {
+                data = state.current_block_ptr + state.block_header_size;
+                byte_pos = 0;
+            }
+        }
+        if (!state.info.is_finished) {
+            uint32_t packed = data[byte_pos] | (data[byte_pos + 1] << 8) | (data[byte_pos + 2] << 16);
+            byte_pos += 3;
+
+            state.buffered_samples[0] = decode_adpcm_3bit(packed & 0x07, &state.left);
+            packed >>= 3;
+            state.buffered_samples[1] = decode_adpcm_3bit(packed & 0x07, &state.left);
+            packed >>= 3;
+            state.buffered_samples[2] = decode_adpcm_3bit(packed & 0x07, &state.left);
+            packed >>= 3;
+            state.buffered_samples[3] = decode_adpcm_3bit(packed & 0x07, &state.left);
+            packed >>= 3;
+            state.buffered_samples[4] = decode_adpcm_3bit(packed & 0x07, &state.left);
+            packed >>= 3;
+            state.buffered_samples[5] = decode_adpcm_3bit(packed & 0x07, &state.left);
+            packed >>= 3;
+            state.buffered_samples[6] = decode_adpcm_3bit(packed & 0x07, &state.left);
+            packed >>= 3;
+            state.buffered_samples[7] = decode_adpcm_3bit(packed & 0x07, &state.left);
+
+            state.samples_buffered = 8;
+            while (state.samples_buffered > 0 && decoded < count) {
+                dest[decoded++] = (int8_t)(state.buffered_samples[8 - state.samples_buffered] >> 8);
+                state.samples_buffered--;
+            }
+        }
+    }
+
+    while (decoded < count) dest[decoded++] = 0;
+
     state.byte_in_block = byte_pos;
     state.info.samples_decoded += decoded;
 }
@@ -631,43 +651,47 @@ static IWRAM_CODE void decode_buffer_mono_4bit(int8_t* dest, uint32_t count) {
     uint32_t byte_pos = state.byte_in_block;
     uint32_t decoded = 0;
 
-    for (uint32_t i = 0; i < count; i++) {
-        if (state.info.is_finished) {
-            dest[i] = 0;
-            continue;
-        }
+    // Drain buffered high nibble from previous call
+    if (state.have_high_nibble && decoded < count) {
+        dest[decoded++] = (int8_t)(state.high_nibble_sample >> 8);
+        state.have_high_nibble = false;
+    }
 
-        // Check for buffered high nibble
-        if (state.have_high_nibble) {
-            dest[i] = (int8_t)(state.high_nibble_sample >> 8);
-            state.have_high_nibble = false;
-            decoded++;
-            continue;
-        }
-
-        // Check if we need next block
+    // Main loop: decode 2 samples per byte
+    while (!state.info.is_finished && decoded + 2 <= count) {
         if (byte_pos >= data_per_block) {
             state.byte_in_block = byte_pos;
             advance_to_next_block();
-            if (state.info.is_finished) {
-                dest[i] = 0;
-                continue;
-            }
+            if (state.info.is_finished) break;
             data = state.current_block_ptr + state.block_header_size;
             byte_pos = 0;
         }
 
         uint32_t byte = data[byte_pos++];
-
-        // Low nibble first
-        int16_t sample_lo = decode_ima_4bit(byte & 0x0F, &state.left);
-        dest[i] = (int8_t)(sample_lo >> 8);
-        decoded++;
-
-        // Buffer high nibble for next iteration
-        state.high_nibble_sample = decode_ima_4bit(byte >> 4, &state.left);
-        state.have_high_nibble = true;
+        dest[decoded++] = (int8_t)(decode_ima_4bit(byte & 0x0F, &state.left) >> 8);
+        dest[decoded++] = (int8_t)(decode_ima_4bit(byte >> 4, &state.left) >> 8);
     }
+
+    // Handle odd sample at end
+    if (!state.info.is_finished && decoded < count) {
+        if (byte_pos >= data_per_block) {
+            state.byte_in_block = byte_pos;
+            advance_to_next_block();
+            if (!state.info.is_finished) {
+                data = state.current_block_ptr + state.block_header_size;
+                byte_pos = 0;
+            }
+        }
+        if (!state.info.is_finished) {
+            uint32_t byte = data[byte_pos++];
+            dest[decoded++] = (int8_t)(decode_ima_4bit(byte & 0x0F, &state.left) >> 8);
+            state.high_nibble_sample = decode_ima_4bit(byte >> 4, &state.left);
+            state.have_high_nibble = true;
+        }
+    }
+
+    while (decoded < count) dest[decoded++] = 0;
+
     state.byte_in_block = byte_pos;
     state.info.samples_decoded += decoded;
 }
@@ -679,48 +703,62 @@ static IWRAM_CODE void decode_buffer_mono_2bit(int8_t* dest, uint32_t count) {
     uint32_t byte_pos = state.byte_in_block;
     uint32_t decoded = 0;
 
-    for (uint32_t i = 0; i < count; i++) {
-        if (state.info.is_finished) {
-            dest[i] = 0;
-            continue;
-        }
+    // Drain buffered samples from previous call
+    while (state.samples_buffered > 0 && decoded < count) {
+        dest[decoded++] = (int8_t)(state.buffered_samples[4 - state.samples_buffered] >> 8);
+        state.samples_buffered--;
+    }
 
-        // Check for buffered samples
-        if (state.samples_buffered > 0) {
-            dest[i] = (int8_t)(state.buffered_samples[4 - state.samples_buffered] >> 8);
-            state.samples_buffered--;
-            decoded++;
-            continue;
-        }
-
-        // Check if we need next block
+    // Main loop: decode 4 samples per byte
+    while (!state.info.is_finished && decoded + 4 <= count) {
         if (byte_pos >= data_per_block) {
             state.byte_in_block = byte_pos;
             advance_to_next_block();
-            if (state.info.is_finished) {
-                dest[i] = 0;
-                continue;
-            }
+            if (state.info.is_finished) break;
             data = state.current_block_ptr + state.block_header_size;
             byte_pos = 0;
         }
 
         uint32_t byte = data[byte_pos++];
-
-        // Decode 4 samples from byte (unrolled, shift instead of multiply)
-        state.buffered_samples[0] = decode_adpcm_2bit(byte & 0x03, &state.left);
+        dest[decoded++] = (int8_t)(decode_adpcm_2bit(byte & 0x03, &state.left) >> 8);
         byte >>= 2;
-        state.buffered_samples[1] = decode_adpcm_2bit(byte & 0x03, &state.left);
+        dest[decoded++] = (int8_t)(decode_adpcm_2bit(byte & 0x03, &state.left) >> 8);
         byte >>= 2;
-        state.buffered_samples[2] = decode_adpcm_2bit(byte & 0x03, &state.left);
+        dest[decoded++] = (int8_t)(decode_adpcm_2bit(byte & 0x03, &state.left) >> 8);
         byte >>= 2;
-        state.buffered_samples[3] = decode_adpcm_2bit(byte & 0x03, &state.left);
-
-        // Output first sample, buffer the rest
-        dest[i] = (int8_t)(state.buffered_samples[0] >> 8);
-        state.samples_buffered = 3;
-        decoded++;
+        dest[decoded++] = (int8_t)(decode_adpcm_2bit(byte & 0x03, &state.left) >> 8);
     }
+
+    // Handle remaining samples (less than 4 needed)
+    if (!state.info.is_finished && decoded < count) {
+        if (byte_pos >= data_per_block) {
+            state.byte_in_block = byte_pos;
+            advance_to_next_block();
+            if (!state.info.is_finished) {
+                data = state.current_block_ptr + state.block_header_size;
+                byte_pos = 0;
+            }
+        }
+        if (!state.info.is_finished) {
+            uint32_t byte = data[byte_pos++];
+            state.buffered_samples[0] = decode_adpcm_2bit(byte & 0x03, &state.left);
+            byte >>= 2;
+            state.buffered_samples[1] = decode_adpcm_2bit(byte & 0x03, &state.left);
+            byte >>= 2;
+            state.buffered_samples[2] = decode_adpcm_2bit(byte & 0x03, &state.left);
+            byte >>= 2;
+            state.buffered_samples[3] = decode_adpcm_2bit(byte & 0x03, &state.left);
+
+            state.samples_buffered = 4;
+            while (state.samples_buffered > 0 && decoded < count) {
+                dest[decoded++] = (int8_t)(state.buffered_samples[4 - state.samples_buffered] >> 8);
+                state.samples_buffered--;
+            }
+        }
+    }
+
+    while (decoded < count) dest[decoded++] = 0;
+
     state.byte_in_block = byte_pos;
     state.info.samples_decoded += decoded;
 }
