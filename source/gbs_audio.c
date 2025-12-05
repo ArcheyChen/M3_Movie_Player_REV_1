@@ -464,7 +464,12 @@ static IWRAM_CODE void parse_block_header_mono(const uint8_t* block, ChannelStat
     uint16_t predictor = block[0] | (block[1] << 8);
     uint16_t step_idx = block[2] | (block[3] << 8);
 
-    ch->predictor = predictor;
+    // Mode 2 uses IMA ADPCM with signed predictor
+    if (state.info.mode == GBS_MODE_MONO_4BIT) {
+        ch->predictor = (int16_t)(predictor - 0x8000);
+    } else {
+        ch->predictor = predictor;
+    }
     ch->step_index = step_idx;
 
     // Clamp step index based on mode
