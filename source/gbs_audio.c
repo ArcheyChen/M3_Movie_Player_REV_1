@@ -835,7 +835,7 @@ bool gbs_audio_init(const uint8_t* gbs_data, uint32_t gbs_size) {
             state.block_header_size = 4;
             break;
         case GBS_MODE_MONO_4BIT:
-            state.info.sample_rate = 11025;
+            state.info.sample_rate = 22050;
             state.info.channels = 1;
             state.info.block_size = 0x200;
             state.block_header_size = 4;
