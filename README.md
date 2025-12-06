@@ -1,7 +1,7 @@
-A third-party, M3 movie player compatible, GBM GBS file movie player
+# ReXtal -- A third-party, M3 movie player compatible, GBM GBS file movie player
 
+Reprinting or modification must credit the original source https://github.com/ArcheyChen/ReXtal_GBA_M3_video_decoder
 
-Reprinting or modification must credit the original source https://github.com/ArcheyChen/M3_Movie_Player_REV_1
-
+Currently supports `.gbm` and `.gbs` files from M3 video converter 1.x, tested on 1.22.
 
 Unauthorized use for commercial purposes is prohibited
