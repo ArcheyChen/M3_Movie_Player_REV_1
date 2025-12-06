@@ -346,6 +346,9 @@ int main(void) {
             has_video = true;
             video_data = video_info.data;
             video_size = video_info.size;
+            // Set decoder version based on header (offset 0x10)
+            // Gen1 = 0x06, Gen3 = 0x05
+            gbm_set_version(video_info.data[0x10]);
         }
     }
 

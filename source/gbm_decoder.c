@@ -3,6 +3,19 @@
 
 #define ROW_BYTES (FRAME_WIDTH * 2)
 
+// XOR key for decoding flag_bytes (default to Gen1)
+static u16 xor_key = 0xD669;
+
+void gbm_set_version(u8 version) {
+    if (version == GBM_VERSION_GEN3) {
+        xor_key = 0xD6AC;
+    } else if (version == GBM_VERSION_V130) {
+        xor_key = 0x0000;  // No encryption
+    } else {
+        xor_key = 0xD669;  // Gen1 default
+    }
+}
+
 // Codebook offsets - place in IWRAM for fast access (256 bytes)
 // Use .iwram.rodata to avoid conflict with .iwram code section
 __attribute__((section(".iwram.rodata"))) static const s16 CODEBOOK_OFFSETS[] = {
@@ -766,10 +779,7 @@ u32 IWRAM_CODE gbm_decode_frame(const u8 *data, u32 offset, u16 *dst, const u16 
 
     u32 next_offset = offset + 2 + frame_len;
 
-    // u8 b2 = bit_enc & 0xFF;
-    // u8 b3 = (bit_enc >> 8) & 0xFF;
-    // u16 flag_bytes = (b2 ^ 0x69) | ((b3 ^ 0xD6) << 8);
-    u16 flag_bytes = bit_enc ^ 0xD669;
+    u16 flag_bytes = bit_enc ^ xor_key;
 
     DecodeContext ctx;
     ctx.state = 0x80000000; // Initial state

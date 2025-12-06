@@ -7,6 +7,11 @@
 #define FRAME_HEIGHT 160
 #define GBM_HEADER_SIZE 0x200
 
+// GBM format versions
+#define GBM_VERSION_GEN1 0x06  // XOR key 0xD669
+#define GBM_VERSION_GEN3 0x05  // XOR key 0xD6AC
+#define GBM_VERSION_V130 0x04  // No XOR (key 0x0000)
+
 #define IWRAM_CODE __attribute__((section(".iwram"), long_call))
 
 // Context for decoding a single frame
@@ -27,6 +32,10 @@ typedef struct {
     int row_offset;   // Current macroblock row offset in bytes
     int block_offset; // Current block offset in bytes
 } DecodeContext;
+
+// Set XOR key based on GBM version (call once after loading GBM header)
+// version: 0x06 for Gen1, 0x05 for Gen3
+void gbm_set_version(u8 version);
 
 // Initialize and decode a frame
 // returns the offset of the next frame, or 0 on error

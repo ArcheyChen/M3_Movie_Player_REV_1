@@ -145,7 +145,7 @@ static int create_gbfs(const char* gbm_path, const char* gbs_path,
 }
 
 static void print_usage(const char* prog) {
-    fprintf(stderr, "Ausar's GBM Packager - Create GBA movie ROMs\n\n");
+    fprintf(stderr, "Ausar's GBM Packager V0.2 - Create GBA movie ROMs\n\n");
     fprintf(stderr, "Usage:\n");
     fprintf(stderr, "  %s input.gbm input.gbs              (auto-generates input.gba)\n", prog);
     fprintf(stderr, "  %s output.gba input.gbm input.gbs   (explicit output name)\n", prog);

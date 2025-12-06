@@ -6,7 +6,9 @@ CFLAGS = -O2 -Wall
 
 GBA_ROM = ../M3_Movie_Player.gba
 
-all: gbm_packager
+all: gbm_packager gbm_packager.exe
+
+linux: gbm_packager
 
 windows: gbm_packager.exe
 
