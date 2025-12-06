@@ -579,10 +579,12 @@ static IWRAM_CODE void decode_buffer_mono_3bit(int8_t* dest, uint32_t count) {
             byte_pos = 0;
         }
 
-        uint32_t packed = data[byte_pos] | (data[byte_pos + 1] << 8) | (data[byte_pos + 2] << 16);
+        // Encoder packs MSB-first: sample7 at top, sample0 at bottom
+        // Then writes big-endian: byte[0]=bits23-16, byte[1]=bits15-8, byte[2]=bits7-0
+        uint32_t packed = (data[byte_pos] << 16) | (data[byte_pos + 1] << 8) | data[byte_pos + 2];
         byte_pos += 3;
 
-        // Decode and output 8 samples directly
+        // Decode 8 samples from LSB (sample 0) to MSB (sample 7)
         dest[decoded++] = (int8_t)(decode_adpcm_3bit(packed & 0x07, &state.left) >> 8);
         packed >>= 3;
         dest[decoded++] = (int8_t)(decode_adpcm_3bit(packed & 0x07, &state.left) >> 8);
@@ -611,7 +613,8 @@ static IWRAM_CODE void decode_buffer_mono_3bit(int8_t* dest, uint32_t count) {
             }
         }
         if (!state.info.is_finished) {
-            uint32_t packed = data[byte_pos] | (data[byte_pos + 1] << 8) | (data[byte_pos + 2] << 16);
+            // Big-endian read (same as main loop)
+            uint32_t packed = (data[byte_pos] << 16) | (data[byte_pos + 1] << 8) | data[byte_pos + 2];
             byte_pos += 3;
 
             state.buffered_samples[0] = decode_adpcm_3bit(packed & 0x07, &state.left);
@@ -872,7 +875,7 @@ bool gbs_audio_init(const uint8_t* gbs_data, uint32_t gbs_size) {
             state.block_header_size = 8;  // 4 bytes per channel
             break;
         case GBS_MODE_MONO_3BIT:
-            state.info.sample_rate = 11025;
+            state.info.sample_rate = 44100;  // 11:1 compression vs 44.1kHz 16-bit stereo
             state.info.channels = 1;
             state.info.block_size = 0x400;
             state.block_header_size = 4;
